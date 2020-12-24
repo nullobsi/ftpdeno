@@ -2,10 +2,9 @@ import {ConnectionOptions, IntConnOpts} from "../types/ConnectionOptions.ts";
 import {Commands, StatusCodes, Types} from "../util/enums.ts";
 import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
+import free from "../util/free.ts";
 
-//TODO: simplify some of the locking/initialization procedures
-
-class FTPClient {
+class FTPClient implements Deno.Closer {
     private conn?: Deno.Conn;
     private dataConn?: Deno.Conn;
     private activeListener?: Deno.Listener;
@@ -48,12 +47,11 @@ class FTPClient {
                 n.activeIp = opts.activeIp;
             }
             if (opts.tlsOpts) {
-                let tlsO = {
+                n.tlsOpts = {
                     hostname: opts.tlsOpts.hostname ? opts.tlsOpts.hostname : host,
                     certFile: opts.tlsOpts.certFile,
                     implicit: opts.tlsOpts.implicit === undefined ? false : opts.tlsOpts.implicit
-                }
-                n.tlsOpts = tlsO;
+                };
             }
         }
         this.opts = n;
@@ -69,50 +67,35 @@ class FTPClient {
         });
 
         let status = await this.getStatus();
-        if (status.code !== StatusCodes.Ready) {
-            throw status;
-        }
+        this.assertStatus(StatusCodes.Ready, status);
 
         //handle TLS handshake
         if (this.opts.tlsOpts) {
             if (!this.opts.tlsOpts.implicit) {
                 status = await this.command(Commands.Auth, "TLS");
-                if (status.code !== StatusCodes.AuthProceed) {
-                    this.conn.close();
-                    throw status;
-                }
+                this.assertStatus(StatusCodes.AuthProceed, status, this.conn);
             }
-            let tlsConn = await Deno.startTls(this.conn, {
+
+            //replace connection with tls
+            this.conn = await Deno.startTls(this.conn, {
                 hostname: this.opts.tlsOpts.hostname,
                 certFile: this.opts.tlsOpts.certFile,
             });
-            this.conn = tlsConn;
 
             //switch data channels to TLS
             status = await this.command(Commands.Protection, "P");
-            if (status.code !== StatusCodes.OK) {
-                this.conn.close();
-                throw status;
-            }
+            this.assertStatus(StatusCodes.OK, status, this.conn);
         }
 
         status = await this.command(Commands.User, this.opts.user);
-        if (status.code !== StatusCodes.NeedPass) {
-            throw status;
-        }
+        this.assertStatus(StatusCodes.NeedPass, status, this.conn);
 
         status = await this.command(Commands.Password, this.opts.pass);
-
-        if (status.code !== StatusCodes.LoggedIn) {
-            throw status;
-        }
+        this.assertStatus(StatusCodes.LoggedIn, status, this.conn);
 
         //Switch to binary mode
         status = await this.command(Commands.Type, Types.Binary);
-
-        if (status.code !== StatusCodes.OK) {
-            throw status;
-        }
+        this.assertStatus(StatusCodes.OK, status, this.conn);
 
         return;
     }
@@ -214,36 +197,11 @@ class FTPClient {
      * @param fileName
      */
     public async download(fileName: string) {
-        await this.lock.lock();
-        if (this.conn === undefined) {
-            this.lock.unlock();
-            throw FTPClient.notInit();
-        }
-        await this.initializeDataConnection();
-        let res = await this.command(Commands.Retrieve, fileName);
-
-        if (res.code !== 150) {
-            this.dataConn?.close();
-            this.activeListener?.close();
-            this.lock.unlock();
-            throw res;
-        }
-
-        let conn = await this.finalizeDataConnection();
-
+        let conn = await this.downloadStream(fileName);
         let data = await FTPClient.recieve(conn);
-        conn.close();
+        await this.finalizeStream();
 
-        res = await this.getStatus();
-        if (res.code !== 226) {
-            conn.close();
-            this.lock.unlock();
-            throw res;
-        }
-
-        this.lock.unlock();
         return data;
-
     }
 
     /**
@@ -258,18 +216,11 @@ class FTPClient {
             throw FTPClient.notInit();
         }
         await this.initializeDataConnection();
+
         let res = await this.command(Commands.Retrieve, fileName);
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
-        if (res.code !== 150) {
-            this.dataConn?.close();
-            this.activeListener?.close();
-            this.lock.unlock();
-            throw res;
-        }
-
-        let conn = await this.finalizeDataConnection();
-
-        return conn;
+        return await this.finalizeDataConnection();
     }
 
     /**
@@ -278,42 +229,10 @@ class FTPClient {
      * @param data
      */
     public async upload(fileName: string, data: Uint8Array) {
-        await this.lock.lock();
-        if (this.conn === undefined) {
-            this.lock.unlock()
-            throw FTPClient.notInit();
-        }
-        await this.initializeDataConnection();
-
-        let res = await this.command(Commands.Allocate, data.byteLength.toString());
-
-
-        if (res.code !== 202 && res.code !== 200) {
-            this.lock.unlock();
-            this.activeListener?.close();
-            this.dataConn?.close();
-            throw res;
-        }
-
-
-        res = await this.command(Commands.Store, fileName);
-        if (res.code !== 150) {
-            this.lock.unlock();
-            this.dataConn?.close();
-            this.activeListener?.close();
-            throw res;
-        }
-
-        let conn = await this.finalizeDataConnection();
+        let conn = await this.uploadStream(fileName, data.byteLength);
         let written = await conn.write(data);
-        conn.close();
+        await this.finalizeStream();
 
-        let code = await this.getStatus();
-        if (code.code !== 226) {
-            this.lock.unlock();
-            throw code;
-        }
-        this.lock.unlock();
         return written;
     }
 
@@ -329,28 +248,20 @@ class FTPClient {
             this.lock.unlock()
             throw FTPClient.notInit();
         }
+
         await this.initializeDataConnection();
 
         if (allocate !== undefined) {
             let res = await this.command(Commands.Allocate, allocate.toString());
             if (res.code !== 202 && res.code !== 200) {
-                this.lock.unlock();
-                this.activeListener?.close();
-                this.dataConn?.close();
-                throw res;
+                this.assertStatus(StatusCodes.OK, res, this.activeListener, this.dataConn);
             }
         }
 
         let res = await this.command(Commands.Store, fileName);
-        if (res.code !== 150) {
-            this.lock.unlock();
-            this.dataConn?.close();
-            this.activeListener?.close();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
-        let conn = await this.finalizeDataConnection();
-        return conn;
+        return await this.finalizeDataConnection();
     }
 
 
@@ -358,13 +269,10 @@ class FTPClient {
      * Unlock and close connections for streaming.
      */
     public async finalizeStream() {
-        this.dataConn?.close();
+        free(this.dataConn);
 
         let res = await this.getStatus();
-        if (res.code !== 226) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.DataClose, res);
 
         this.lock.unlock();
     }
@@ -383,15 +291,11 @@ class FTPClient {
         }
 
         let res = await this.command(Commands.RenameFrom, from);
-        if (res.code !== 350) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.NeedFileInfo, res);
+
         res = await this.command(Commands.RenameTo, to);
-        if (res.code !== 250) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.ActionOK, res);
+
         this.lock.unlock();
         return true;
     }
@@ -408,14 +312,9 @@ class FTPClient {
         }
 
         let res = await this.command(Commands.Delete, fileName);
-
-        if (res.code !== 250) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.ActionOK, res);
 
         this.lock.unlock();
-        return true;
     }
 
     /**
@@ -430,14 +329,9 @@ class FTPClient {
         }
 
         let res = await this.command(Commands.RMDIR, dirName);
-
-        if (res.code !== 250) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.ActionOK, res);
 
         this.lock.unlock();
-        return true;
     }
 
     /**
@@ -452,11 +346,7 @@ class FTPClient {
         }
 
         let res = await this.command(Commands.MKDIR, dirName);
-
-        if (res.code !== 257) {
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.DirCreated, res);
 
         this.lock.unlock();
         return true;
@@ -476,32 +366,21 @@ class FTPClient {
         await this.initializeDataConnection();
 
         let res = await this.command(Commands.List, dirName);
-
-
-        if (res.code !== 150) {
-            this.lock.unlock();
-            this.dataConn?.close();
-            this.activeListener?.close();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener)
 
         let conn = await this.finalizeDataConnection();
         let data = await FTPClient.recieve(conn);
         conn.close();
 
         res = await this.getStatus();
-        if (res.code !== 226) {
-            conn.close();
-            this.lock.unlock();
-            throw res;
-        }
+        this.assertStatus(StatusCodes.DataClose, res);
+
+        this.lock.unlock();
 
         let listing = this.decode.decode(data);
         listing = listing.trimEnd()
-        let arr = listing.split("\r\n");
 
-        this.lock.unlock();
-        return arr;
+        return listing.split("\r\n");
     }
 
     /**
@@ -538,9 +417,21 @@ class FTPClient {
         for await (let a of iter) {
             let decoded = this.decode.decode(a);
             s += decoded;
-            if (s.endsWith("\r\n")) {
-                break;
+            if (s[3] !== '-') {
+                if (s.endsWith("\r\n")) {
+                    break;
+                }
+            } else {
+                let i = s.lastIndexOf("\r\n");
+                if (i !== -1) {
+                    let pi = s.lastIndexOf("\r\n", i - 1);
+                    let lastLine = s.substring(pi + 2, i);
+                    if (lastLine.startsWith(s.substr(0,3))) {
+                        break;
+                    }
+                }
             }
+
         }
         let statusCode = parseInt(s.substr(0, 3));
         let message = s.length > 3 ? s.substr(4).trimEnd() : "";
@@ -557,9 +448,9 @@ class FTPClient {
     private async initializeDataConnection() {
         if (this.opts.mode === "passive") {
             let res = await this.command(Commands.PassiveConn);
-            if (res.code !== 229) {
-                throw res;
-            }
+
+            this.assertStatus(StatusCodes.ExtendedPassive, res);
+
             let parsed = Regexes.passivePort.exec(res.message);
             if (parsed === null || parsed.groups === undefined) throw res;
             this.dataConn = await Deno.connect({
@@ -578,10 +469,8 @@ class FTPClient {
             this.activeListener = listener;
 
             let res = await this.command(Commands.ActiveConn, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
-            if (res.code !== 200) {
-                listener.close();
-                throw res;
-            }
+
+            this.assertStatus(StatusCodes.OK, res, listener);
         }
     }
 
@@ -598,6 +487,23 @@ class FTPClient {
                 hostname: this.opts.tlsOpts.hostname,
             });
         return this.dataConn;
+    }
+
+    private assertStatus(expected: StatusCodes, result: { code: number, message: string }, ...resources: (Deno.Closer | undefined)[]) {
+        if (result.code !== expected) {
+            let errors: any[] = [];
+            resources.forEach(v => {
+                if (v !== undefined) {
+                    try {
+                        free(v);
+                    } catch (e) {
+                        errors.push(e);
+                    }
+                }
+            });
+            this.lock.unlock();
+            throw {...result, errors};
+        }
     }
 }
 

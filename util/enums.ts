@@ -48,6 +48,7 @@ enum StatusCodes {
     DataOpen = 225,
     DataClose,
     Passive,
+    ExtendedPassive = 229,
 
     LoggedIn = 230,
     AuthProceed = 234,
