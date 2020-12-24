@@ -1,3 +1,4 @@
+// structure that implements a basic queue sequence through promises
 export default class Lock {
     private inUse = false;
 

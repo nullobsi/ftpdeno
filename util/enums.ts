@@ -50,6 +50,7 @@ enum StatusCodes {
     Passive,
 
     LoggedIn = 230,
+    AuthProceed = 234,
     ActionOK = 250,
 
     DirCreated = 257,
