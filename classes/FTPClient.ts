@@ -1,5 +1,5 @@
 import {ConnectionOptions, IntConnOpts} from "../types/ConnectionOptions.ts";
-import {Commands, Types} from "../util/enums.ts";
+import {Commands, StatusCodes, Types} from "../util/enums.ts";
 import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 
@@ -21,7 +21,7 @@ class FTPClient {
             activePort: 20,
             activeIp: "127.0.0.1",
             activeIpv6: false,
-            tls: true,
+            tlsOpts: undefined,
         };
 
         if (opts) {
@@ -43,8 +43,13 @@ class FTPClient {
             if (opts.activeIp) {
                 n.activeIp = opts.activeIp;
             }
-            if (opts.tls) {
-                n.tls = opts.tls;
+            if (opts.tlsOpts) {
+                let tlsO = {
+                    hostname: opts.tlsOpts.hostname ? opts.tlsOpts.hostname : host,
+                    certFile: opts.tlsOpts.certFile,
+                    implicit: opts.tlsOpts.implicit === undefined ? false : opts.tlsOpts.implicit
+                }
+                n.tlsOpts = tlsO;
             }
         }
         this.opts = n;
@@ -73,25 +78,33 @@ class FTPClient {
         });
 
         let status = await this.getStatus();
-        if (status.code !== 220) {
+        if (status.code !== StatusCodes.Ready) {
             throw status;
         }
 
-        if (this.opts.tls) {
-            status = await this.command(Commands.Auth, "TLS");
-            if (status.code !== 234) {
-                throw status;
+        if (this.opts.tlsOpts) {
+            if (!this.opts.tlsOpts.implicit) {
+                status = await this.command(Commands.Auth, "TLS");
+                if (status.code !== 234) {
+                    this.conn.close();
+                    throw status;
+                }
             }
-            console.log(status)
             let tlsConn = await Deno.startTls(this.conn, {
-                hostname: this.host,
-
+                hostname: this.opts.tlsOpts.hostname,
+                certFile: this.opts.tlsOpts.certFile,
             });
             this.conn = tlsConn;
+
+            status = await this.command(Commands.Protection, "P");
+            if (status.code !== 200) {
+                this.conn.close();
+                throw status;
+            }
         }
 
         status = await this.command(Commands.User, this.opts.user);
-        if (status.code !== 331) {
+        if (status.code !== StatusCodes.NeedPass) {
             throw status;
         }
 
@@ -192,6 +205,8 @@ class FTPClient {
             throw res;
         }
 
+        conn = await this.dataHandshake(conn);
+
         let data = await FTPClient.recieve(conn);
         conn.close();
 
@@ -216,11 +231,14 @@ class FTPClient {
         let conn = await this.initializeDataConnection();
 
         let res = await this.command(Commands.Allocate, data.byteLength.toString());
+
+
         if (res.code !== 202 && res.code !== 200) {
             this.lock.unlock();
             conn.close();
             throw res;
         }
+
 
         res = await this.command(Commands.Store, fileName);
         if (res.code !== 150) {
@@ -228,6 +246,8 @@ class FTPClient {
             conn.close()
             throw res;
         }
+
+        conn = await this.dataHandshake(conn);
         let written = await conn.write(data);
         conn.close();
         let code = await this.getStatus();
@@ -325,12 +345,14 @@ class FTPClient {
 
         let res = await this.command(Commands.List, dirName);
 
+
         if (res.code !== 150) {
             this.lock.unlock();
             conn.close();
             throw res;
         }
 
+        conn = await this.dataHandshake(conn);
         let data = await FTPClient.recieve(conn);
         conn.close();
 
@@ -392,6 +414,7 @@ class FTPClient {
     }
 
     private async initializeDataConnection() {
+        let conn: Deno.Conn;
         if (this.opts.mode === "passive") {
             let res = await this.command(Commands.PassiveConn);
             if (res.code !== 229) {
@@ -399,7 +422,7 @@ class FTPClient {
             }
             let parsed = Regexes.passivePort.exec(res.message);
             if (parsed === null || parsed.groups === undefined) throw res;
-            return await Deno.connect({
+            conn = await Deno.connect({
                 port: parseInt(parsed.groups.port),
                 hostname: this.host,
                 transport: "tcp",
@@ -418,10 +441,20 @@ class FTPClient {
                 listener.close();
                 throw res;
             }
-            let conn = await listener.accept();
+            conn = await listener.accept();
             listener.close();
-            return conn;
         }
+
+
+        return conn;
+    }
+
+    private async dataHandshake(conn: Deno.Conn) {
+        if (this.opts.tlsOpts === undefined) return conn;
+        return await Deno.startTls(conn, {
+            certFile: this.opts.tlsOpts.certFile,
+            hostname: this.opts.tlsOpts.hostname,
+        });
     }
 
 

@@ -21,6 +21,7 @@ enum Commands {
     List = "NLST",
 
     Auth = "AUTH",
+    Protection = "PROT",
 }
 
 enum Types {
@@ -29,4 +30,54 @@ enum Types {
     Binary = "I",
 }
 
-export {Types, Commands}
+enum StatusCodes {
+    RestartMarker = 110,
+    NotReady = 120,
+    StartingTransfer = 125,
+    StartTransferConnection = 150,
+
+    OK = 200,
+    NotImpOK = 202,
+    SysStatus = 211,
+    DirStatus,
+    HelpMessage = 214,
+    SysType,
+
+    Ready = 220,
+    Closing,
+    DataOpen = 225,
+    DataClose,
+    Passive,
+
+    LoggedIn = 230,
+    ActionOK = 250,
+
+    DirCreated = 257,
+
+    NeedPass = 331,
+    NeedAcc = 332,
+    NeedFileInfo = 350,
+
+    Unavailable = 421,
+    DataFailed = 425,
+    DataClosed,
+
+    FileFailure = 450,
+    FileLocalError,
+    FileNoSpace,
+
+    Error = 500,
+    SyntaxError,
+    NotImplemented,
+    IncorrectCommandSeq,
+    ParamNotImp,
+
+    NotLoggedIn = 530,
+    AccNeededToStore = 532,
+
+    FileUnknown = 550,
+    FileAbortNoStorage = 552,
+    FileNameNotAllowed
+}
+
+export {Types, Commands, StatusCodes}
