@@ -5,6 +5,8 @@ import * as Regexes from "../util/regexes.ts";
 
 class FTPClient {
     private conn?: Deno.Conn;
+    private dataConn?: Deno.Conn;
+    private activeListener?: Deno.Listener;
 
     private opts: IntConnOpts;
     private encode = new TextEncoder();
@@ -196,16 +198,17 @@ class FTPClient {
             this.lock.unlock();
             throw FTPClient.notInit();
         }
-        let conn = await this.initializeDataConnection();
+        await this.initializeDataConnection();
         let res = await this.command(Commands.Retrieve, fileName);
 
         if (res.code !== 150) {
-            conn.close();
+            this.dataConn?.close();
+            this.activeListener?.close();
             this.lock.unlock();
             throw res;
         }
 
-        conn = await this.dataHandshake(conn);
+        let conn = await this.dataHandshake();
 
         let data = await FTPClient.recieve(conn);
         conn.close();
@@ -228,14 +231,15 @@ class FTPClient {
             this.lock.unlock()
             throw FTPClient.notInit();
         }
-        let conn = await this.initializeDataConnection();
+        await this.initializeDataConnection();
 
         let res = await this.command(Commands.Allocate, data.byteLength.toString());
 
 
         if (res.code !== 202 && res.code !== 200) {
             this.lock.unlock();
-            conn.close();
+            this.activeListener?.close();
+            this.dataConn?.close();
             throw res;
         }
 
@@ -243,13 +247,15 @@ class FTPClient {
         res = await this.command(Commands.Store, fileName);
         if (res.code !== 150) {
             this.lock.unlock();
-            conn.close()
+            this.dataConn?.close();
+            this.activeListener?.close();
             throw res;
         }
 
-        conn = await this.dataHandshake(conn);
+        let conn = await this.dataHandshake();
         let written = await conn.write(data);
         conn.close();
+
         let code = await this.getStatus();
         if (code.code !== 226) {
             this.lock.unlock();
@@ -341,18 +347,19 @@ class FTPClient {
             throw FTPClient.notInit()
         }
 
-        let conn = await this.initializeDataConnection();
+        await this.initializeDataConnection();
 
         let res = await this.command(Commands.List, dirName);
 
 
         if (res.code !== 150) {
             this.lock.unlock();
-            conn.close();
+            this.dataConn?.close();
+            this.activeListener?.close();
             throw res;
         }
 
-        conn = await this.dataHandshake(conn);
+        let conn = await this.dataHandshake();
         let data = await FTPClient.recieve(conn);
         conn.close();
 
@@ -414,7 +421,6 @@ class FTPClient {
     }
 
     private async initializeDataConnection() {
-        let conn: Deno.Conn;
         if (this.opts.mode === "passive") {
             let res = await this.command(Commands.PassiveConn);
             if (res.code !== 229) {
@@ -422,7 +428,7 @@ class FTPClient {
             }
             let parsed = Regexes.passivePort.exec(res.message);
             if (parsed === null || parsed.groups === undefined) throw res;
-            conn = await Deno.connect({
+            this.dataConn = await Deno.connect({
                 port: parseInt(parsed.groups.port),
                 hostname: this.host,
                 transport: "tcp",
@@ -435,26 +441,28 @@ class FTPClient {
                     port: this.opts.activePort,
                 }
             );
+            this.activeListener = listener;
 
             let res = await this.command(Commands.ActiveConn, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
             if (res.code !== 200) {
                 listener.close();
                 throw res;
             }
-            conn = await listener.accept();
-            listener.close();
         }
-
-
-        return conn;
     }
 
-    private async dataHandshake(conn: Deno.Conn) {
-        if (this.opts.tlsOpts === undefined) return conn;
-        return await Deno.startTls(conn, {
-            certFile: this.opts.tlsOpts.certFile,
-            hostname: this.opts.tlsOpts.hostname,
-        });
+    private async dataHandshake() {
+        if (this.opts.mode == "active") {
+            this.dataConn = await this.activeListener?.accept();
+            this.activeListener?.close();
+        }
+        if (this.dataConn === undefined) throw new Error("Could not initialize data connection!");
+        if (this.opts.tlsOpts)
+            this.dataConn = await Deno.startTls(this.dataConn, {
+                certFile: this.opts.tlsOpts.certFile,
+                hostname: this.opts.tlsOpts.hostname,
+            });
+        return this.dataConn;
     }
 
 
