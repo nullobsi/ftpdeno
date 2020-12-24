@@ -6,6 +6,12 @@ export interface ConnectionOptions {
     activePort?: number,
     activeIp?: string,
     activeIpv6?: boolean,
+    tls?: boolean,
+    tlsOpts?: {
+        implicit??: boolean,
+        hostname: string,
+
+    },
 }
 
 export interface IntConnOpts {
@@ -16,4 +22,9 @@ export interface IntConnOpts {
     activePort: number,
     activeIp: string,
     activeIpv6: boolean,
+    tlsOpts?: {
+        implicit: boolean,
+        hostname: string,
+
+    },
 }

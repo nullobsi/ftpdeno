@@ -18,7 +18,9 @@ enum Commands {
     RMDIR = "RMD",
     MKDIR = "MKD",
     PWD = "PWD",
-    List = "NLST"
+    List = "NLST",
+
+    Auth = "AUTH",
 }
 
 enum Types {

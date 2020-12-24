@@ -21,6 +21,7 @@ class FTPClient {
             activePort: 20,
             activeIp: "127.0.0.1",
             activeIpv6: false,
+            tls: true,
         };
 
         if (opts) {
@@ -41,6 +42,9 @@ class FTPClient {
             }
             if (opts.activeIp) {
                 n.activeIp = opts.activeIp;
+            }
+            if (opts.tls) {
+                n.tls = opts.tls;
             }
         }
         this.opts = n;
@@ -71,6 +75,19 @@ class FTPClient {
         let status = await this.getStatus();
         if (status.code !== 220) {
             throw status;
+        }
+
+        if (this.opts.tls) {
+            status = await this.command(Commands.Auth, "TLS");
+            if (status.code !== 234) {
+                throw status;
+            }
+            console.log(status)
+            let tlsConn = await Deno.startTls(this.conn, {
+                hostname: this.host,
+
+            });
+            this.conn = tlsConn;
         }
 
         status = await this.command(Commands.User, this.opts.user);
