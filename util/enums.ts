@@ -22,6 +22,9 @@ enum Commands {
 
     Auth = "AUTH",
     Protection = "PROT",
+
+    Size = "SIZE",
+    ModifiedTime = "MDTM",
 }
 
 enum Types {
@@ -40,7 +43,8 @@ enum StatusCodes {
     NotImpOK = 202,
     SysStatus = 211,
     DirStatus,
-    HelpMessage = 214,
+    FileStat,
+    HelpMessage,
     SysType,
 
     Ready = 220,

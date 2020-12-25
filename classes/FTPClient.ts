@@ -277,6 +277,106 @@ class FTPClient implements Deno.Closer {
         this.lock.unlock();
     }
 
+    //naive way of doing this but there isn't really another way that works on everything
+    //TODO: use feat command and use MLST if available
+    /**
+     * Obtain file information from the FTP server.
+     * @param filename
+     */
+    public async stat(filename: string): Promise<Deno.FileInfo> {
+        let retn: Deno.FileInfo = {
+            atime: null,
+            birthtime: null,
+            blksize: null,
+            blocks: null,
+            dev: null,
+            gid: null,
+            ino: null,
+            mode: null,
+            nlink: null,
+            rdev: null,
+            uid: null,
+
+            mtime: null,
+            isSymlink: false,
+            isFile: true,
+            isDirectory: false,
+            size: 0
+        }
+
+
+        try {
+            retn.size = await this.size(filename);
+        } catch (e) {
+            if (e.code !== 550) {
+                throw e;
+            } else {
+                retn.isDirectory = true;
+                retn.isFile = false;
+            }
+        }
+
+        if (retn.isFile) {
+            retn.mtime = await this.modified(filename);
+        }
+
+        return retn;
+    }
+
+    /**
+     * Get file size in bytes
+     * @param filename
+     */
+    public async size(filename: string): Promise<number> {
+        await this.lock.lock();
+        if (this.conn === undefined) {
+            this.lock.unlock();
+            throw FTPClient.notInit();
+        }
+
+        let res = await this.command(Commands.Size, filename);
+        this.assertStatus(StatusCodes.FileStat, res);
+
+        this.lock.unlock();
+        return parseInt(res.message);
+    }
+
+    /**
+     * Get file modification time.
+     * @param filename
+     */
+    public async modified(filename: string): Promise<Date> {
+        await this.lock.lock();
+        if (this.conn === undefined) {
+            this.lock.unlock();
+            throw FTPClient.notInit();
+        }
+
+        let res = await this.command(Commands.ModifiedTime, filename);
+        this.assertStatus(StatusCodes.FileStat, res);
+        this.lock.unlock();
+
+        let parsed = Regexes.mdtmReply.exec(res.message);
+        if (parsed && parsed.groups) {
+            console.log(parsed.groups);
+            let year = parseInt(parsed.groups.year);
+            let month = parseInt(parsed.groups.month);
+            let day = parseInt(parsed.groups.day);
+            let hour = parseInt(parsed.groups.hour);
+            let minute = parseInt(parsed.groups.minute);
+            let second = parseInt(parsed.groups.second);
+            let ms = parsed.groups.ms;
+            let date = new Date(year, month, day, hour, minute, second);
+            if (ms !== undefined) {
+                let n = parseFloat(ms);
+                date.setMilliseconds(n*1000);
+            }
+            return date;
+        } else {
+            throw res;
+        }
+    }
+
 
     /**
      * Rename a file on the server.
@@ -370,7 +470,7 @@ class FTPClient implements Deno.Closer {
 
         let conn = await this.finalizeDataConnection();
         let data = await FTPClient.recieve(conn);
-        conn.close();
+        free(conn);
 
         res = await this.getStatus();
         this.assertStatus(StatusCodes.DataClose, res);
@@ -388,10 +488,9 @@ class FTPClient implements Deno.Closer {
      */
     public async close() {
         await this.lock.lock();
-        if (this.conn) {
-            await this.command(Commands.Quit);
-            this.conn.close();
-        }
+        free(this.conn);
+        free(this.activeListener);
+        free(this.dataConn);
         this.lock.unlock();
     }
 
@@ -478,7 +577,7 @@ class FTPClient implements Deno.Closer {
     private async finalizeDataConnection() {
         if (this.opts.mode == "active") {
             this.dataConn = await this.activeListener?.accept();
-            this.activeListener?.close();
+            free(this.activeListener);
         }
         if (this.dataConn === undefined) throw new Error("Could not initialize data connection!");
         if (this.opts.tlsOpts)
