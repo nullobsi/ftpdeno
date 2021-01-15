@@ -1,8 +1,10 @@
 # FTPDeno
 
-Pure TypeScript FTP Client for Deno. 
+Pure TypeScript FTP Client for Deno. [Docs here](https://doc.deno.land/https/deno.land/x/ftpc/mod.ts)
 
-TLS is supported, however due to [issues in Deno](https://github.com/denoland/deno/issues/6427), servers that use older ciphers may have issues connecting. [SSL session reuse](https://github.com/denoland/deno/issues/8875) is also not supported. Tested using vsFTPd v3.0.3. However, tests are not extensive; please report problems if they occur! 
+TLS is supported, however due to [issues in Deno](https://github.com/denoland/deno/issues/6427), servers that use older ciphers may have issues connecting. 
+[SSL session reuse](https://github.com/denoland/deno/issues/8875) is coming to Deno soon! Tested using vsFTPd v3.0.3. 
+However, tests are not extensive; please report problems if they occur! 
 
 Unstable is required.
 
