@@ -1,3 +1,1 @@
-import FTPClient from "./classes/FTPClient.ts";
-
-export {FTPClient}
+export {FTPClient} from "./classes/FTPClient.ts"

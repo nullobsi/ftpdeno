@@ -4,7 +4,7 @@ import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
 
-class FTPClient implements Deno.Closer {
+export class FTPClient implements Deno.Closer {
     private conn?: Deno.Conn;
     private dataConn?: Deno.Conn;
     private activeListener?: Deno.Listener;
@@ -606,5 +606,3 @@ class FTPClient implements Deno.Closer {
         }
     }
 }
-
-export default FTPClient;
