@@ -105,6 +105,7 @@ class FTPClient implements Deno.Closer {
     }
 
     private static async recieve(reader: Deno.Reader) {
+        // use async iterator to write chunks to data array
         let iter = Deno.iter(reader);
         let data = new Uint8Array();
         for await (let chunk of iter) {
@@ -117,7 +118,7 @@ class FTPClient implements Deno.Closer {
     }
 
     /**
-     * Current Working Directory
+     * Current Working Directory `pwd`
      */
     public async cwd() {
         await this.lock.lock();
@@ -147,7 +148,7 @@ class FTPClient implements Deno.Closer {
     }
 
     /**
-     * Change CWD
+     * `cd` like command
      */
     public async chdir(path: string) {
         await this.lock.lock();
@@ -170,7 +171,7 @@ class FTPClient implements Deno.Closer {
     }
 
     /**
-     * Like cd ..
+     * Like `cd ..`
      */
     public async cdup() {
         await this.lock.lock();
@@ -506,7 +507,6 @@ class FTPClient implements Deno.Closer {
     }
 
     //parse response from FTP control channel
-    //TODO: multiline responses
     private async getStatus() {
         if (!this.conn) throw FTPClient.notInit();
 
@@ -588,6 +588,7 @@ class FTPClient implements Deno.Closer {
         return this.dataConn;
     }
 
+    // check status or throw error
     private assertStatus(expected: StatusCodes, result: { code: number, message: string }, ...resources: (Deno.Closer | undefined)[]) {
         if (result.code !== expected) {
             let errors: any[] = [];
