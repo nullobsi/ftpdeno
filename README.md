@@ -21,7 +21,7 @@ This is also located in the Examples folder.
 
 ```ts
 // Requires --allow-net and --allow-write
-import FTPClient from "https://deno.land/x/ftpc/mod.ts";
+import {FTPClient} from "https://deno.land/x/ftpc/mod.ts";
 
 // Connect as anonymous user
 let client = new FTPClient("speedtest.tele2.net");
