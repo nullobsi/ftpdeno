@@ -1,4 +1,4 @@
-import FTPClient from "../mod.ts";
+import {FTPClient} from "../mod.ts";
 
 // Create a connection to an FTP server
 let client = new FTPClient("ftp.server", {
