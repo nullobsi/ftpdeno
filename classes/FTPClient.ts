@@ -49,7 +49,7 @@ export class FTPClient implements Deno.Closer {
             if (opts.tlsOpts) {
                 n.tlsOpts = {
                     hostname: opts.tlsOpts.hostname ? opts.tlsOpts.hostname : host,
-                    certFile: opts.tlsOpts.certFile,
+                    caCerts: opts.tlsOpts.caCerts,
                     implicit: opts.tlsOpts.implicit === undefined ? false : opts.tlsOpts.implicit
                 };
             }
@@ -79,7 +79,7 @@ export class FTPClient implements Deno.Closer {
             //replace connection with tls
             this.conn = await Deno.startTls(this.conn, {
                 hostname: this.opts.tlsOpts.hostname,
-                certFile: this.opts.tlsOpts.certFile,
+                caCerts: this.opts.tlsOpts.caCerts,
             });
 
             //switch data channels to TLS
@@ -584,7 +584,7 @@ export class FTPClient implements Deno.Closer {
         if (this.dataConn === undefined) throw new Error("Could not initialize data connection!");
         if (this.opts.tlsOpts)
             this.dataConn = await Deno.startTls(this.dataConn, {
-                certFile: this.opts.tlsOpts.certFile,
+                caCerts: this.opts.tlsOpts.caCerts,
                 hostname: this.opts.tlsOpts.hostname,
             });
         return this.dataConn;

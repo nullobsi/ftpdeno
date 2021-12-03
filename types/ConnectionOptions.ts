@@ -9,7 +9,7 @@ export interface ConnectionOptions {
     tlsOpts?: {
         implicit?: boolean,
         hostname?: string,
-        certFile?: string,
+        caCerts?: string[],
     },
 }
 
@@ -24,6 +24,6 @@ export interface IntConnOpts {
     tlsOpts?: {
         implicit: boolean,
         hostname: string,
-        certFile?: string,
+        caCerts?: string[],
     },
 }
