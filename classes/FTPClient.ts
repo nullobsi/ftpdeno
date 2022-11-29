@@ -95,7 +95,7 @@ export class FTPClient implements Deno.Closer {
         // Discover features
         status = await this.command(Commands.Features);
 
-        let discoveredFeats = status.message.split("\r\n").map(a => a.trim());
+        const discoveredFeats = status.message.split("\r\n").map(a => a.trim());
         this.feats = Object.fromEntries(FEATURES.map(feat => [feat, discoveredFeats.includes(feat)])) as FeatMatrix;
 
         let mlst = discoveredFeats.find(v => v.startsWith("MLST"));
@@ -348,7 +348,7 @@ export class FTPClient implements Deno.Closer {
         };
 
         if (this.feats.MLST) {
-            let status = await this.command(Commands.ExData, filename);
+            const status = await this.command(Commands.ExData, filename);
             this.assertStatus(StatusCodes.ActionOK, status);
 
             const entry = status.message.split("\r\n")[1];
@@ -384,7 +384,7 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit();
         }
 
-        let res = await this.command(Commands.Size, filename);
+        const res = await this.command(Commands.Size, filename);
         this.assertStatus(StatusCodes.FileStat, res);
 
         this.lock.unlock();
@@ -406,7 +406,7 @@ export class FTPClient implements Deno.Closer {
             throw new Error("Feature is missing.", {cause: "Feature MDTM is not implemented by the FTP server."});
         }
 
-        let res = await this.command(Commands.ModifiedTime, filename);
+        const res = await this.command(Commands.ModifiedTime, filename);
         this.assertStatus(StatusCodes.FileStat, res);
         this.lock.unlock();
 
@@ -446,7 +446,7 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit()
         }
 
-        let res = await this.command(Commands.Delete, fileName);
+        const res = await this.command(Commands.Delete, fileName);
         this.assertStatus(StatusCodes.ActionOK, res);
 
         this.lock.unlock();
@@ -463,7 +463,7 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit()
         }
 
-        let res = await this.command(Commands.RMDIR, dirName);
+        const res = await this.command(Commands.RMDIR, dirName);
         this.assertStatus(StatusCodes.ActionOK, res);
 
         this.lock.unlock();
@@ -480,7 +480,7 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit()
         }
 
-        let res = await this.command(Commands.MKDIR, dirName);
+        const res = await this.command(Commands.MKDIR, dirName);
         this.assertStatus(StatusCodes.DirCreated, res);
 
         this.lock.unlock();
@@ -503,8 +503,8 @@ export class FTPClient implements Deno.Closer {
         let res = await this.command(Commands.PlainList, dirName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
-        let conn = await this.finalizeDataConnection();
-        let data = await FTPClient.recieve(conn);
+        const conn = await this.finalizeDataConnection();
+        const data = await FTPClient.recieve(conn);
         free(conn);
 
         res = await this.getStatus();
@@ -530,8 +530,8 @@ export class FTPClient implements Deno.Closer {
         let res = await this.command(Commands.ExList, dirName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
-        let conn = await this.finalizeDataConnection();
-        let data = await FTPClient.recieve(conn);
+        const conn = await this.finalizeDataConnection();
+        const data = await FTPClient.recieve(conn);
         free(conn);
 
         res = await this.getStatus();
@@ -542,7 +542,7 @@ export class FTPClient implements Deno.Closer {
         let listing = this.decode.decode(data);
         listing = listing.trimEnd();
 
-        let entries = listing.split("\r\n");
+        const entries = listing.split("\r\n");
 
         return entries.map(e => this.parseMLST(e));
     }
@@ -581,7 +581,7 @@ export class FTPClient implements Deno.Closer {
             isDirectory: false,
             size: 0
         };
-        let data = input.trim().split(";");
+        const data = input.trim().split(";");
         let filename = data.pop();
         if (filename) {
             // Remove initial space
@@ -590,7 +590,7 @@ export class FTPClient implements Deno.Closer {
             filename = "";
         }
 
-        let fileStat = Object.fromEntries(data.map(v => v.split("=")));
+        const fileStat = Object.fromEntries(data.map(v => v.split("=")));
         if (fileStat.type) {
             if (fileStat.type == "file") {
                 retn.isFile = true;
@@ -638,19 +638,19 @@ export class FTPClient implements Deno.Closer {
     }
 
     private parseMDTM(date: string): Date {
-        let parsed = Regexes.mdtmReply.exec(date);
+        const parsed = Regexes.mdtmReply.exec(date);
         if (parsed && parsed.groups) {
-            let year = parseInt(parsed.groups.year);
+            const year = parseInt(parsed.groups.year);
             // Annoyingly, months are zero indexed
-            let month = parseInt(parsed.groups.month) - 1;
-            let day = parseInt(parsed.groups.day);
-            let hour = parseInt(parsed.groups.hour);
-            let minute = parseInt(parsed.groups.minute);
-            let second = parseInt(parsed.groups.second);
-            let ms = parsed.groups.ms;
-            let date = new Date(year, month, day, hour, minute, second);
+            const month = parseInt(parsed.groups.month) - 1;
+            const day = parseInt(parsed.groups.day);
+            const hour = parseInt(parsed.groups.hour);
+            const minute = parseInt(parsed.groups.minute);
+            const second = parseInt(parsed.groups.second);
+            const ms = parsed.groups.ms;
+            const date = new Date(year, month, day, hour, minute, second);
             if (ms !== undefined) {
-                let n = parseFloat(ms);
+                const n = parseFloat(ms);
                 date.setMilliseconds(n * 1000);
             }
             return date;
@@ -664,7 +664,7 @@ export class FTPClient implements Deno.Closer {
         if (!this.conn) {
             throw new Error("Connection not initialized!");
         }
-        let encoded = this.encode.encode(`${c.toString()}${args ? " " + args : ""}\r\n`);
+        const encoded = this.encode.encode(`${c.toString()}${args ? " " + args : ""}\r\n`);
         await this.conn.write(encoded);
         return await this.getStatus();
 
@@ -675,29 +675,29 @@ export class FTPClient implements Deno.Closer {
         if (!this.conn) throw FTPClient.notInit();
 
         let s = "";
-        let iter = iterateReader(this.conn);
+        const iter = iterateReader(this.conn);
 
-        for await (let a of iter) {
-            let decoded = this.decode.decode(a);
+        for await (const a of iter) {
+            const decoded = this.decode.decode(a);
             s += decoded;
             if (s[3] !== '-') {
                 if (s.endsWith("\r\n")) {
                     break;
                 }
             } else {
-                let i = s.lastIndexOf("\r\n");
+                const i = s.lastIndexOf("\r\n");
                 if (i !== -1) {
-                    let pi = s.lastIndexOf("\r\n", i - 1);
-                    let lastLine = s.substring(pi + 2, i);
-                    if (lastLine.startsWith(s.substr(0, 3))) {
+                    const pi = s.lastIndexOf("\r\n", i - 1);
+                    const lastLine = s.substring(pi + 2, i);
+                    if (lastLine.startsWith(s.substring(0, 3))) {
                         break;
                     }
                 }
             }
 
         }
-        let statusCode = parseInt(s.substr(0, 3));
-        let message = s.length > 3 ? s.substr(4).trimEnd() : "";
+        const statusCode = parseInt(s.substring(0, 3));
+        const message = s.length > 3 ? s.substring(4).trimEnd() : "";
 
         return {
             code: statusCode,
@@ -710,11 +710,11 @@ export class FTPClient implements Deno.Closer {
     // initialize data connections to server
     private async initializeDataConnection() {
         if (this.opts.mode === "passive") {
-            let res = await this.command(Commands.PassiveConn);
+            const res = await this.command(Commands.PassiveConn);
 
             this.assertStatus(StatusCodes.ExtendedPassive, res);
 
-            let parsed = Regexes.passivePort.exec(res.message);
+            const parsed = Regexes.passivePort.exec(res.message);
             if (parsed === null || parsed.groups === undefined) throw res;
             this.dataConn = await Deno.connect({
                 port: parseInt(parsed.groups.port),
@@ -722,7 +722,7 @@ export class FTPClient implements Deno.Closer {
                 transport: "tcp",
             });
         } else {
-            let listener = await Deno.listen(
+            const listener = await Deno.listen(
                 {
                     transport: "tcp",
                     hostname: this.opts.activeIp,
@@ -731,7 +731,7 @@ export class FTPClient implements Deno.Closer {
             );
             this.activeListener = listener;
 
-            let res = await this.command(Commands.ActiveConn, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
+            const res = await this.command(Commands.ActiveConn, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
 
             this.assertStatus(StatusCodes.OK, res, listener);
         }
@@ -755,7 +755,7 @@ export class FTPClient implements Deno.Closer {
     // check status or throw error
     private assertStatus(expected: StatusCodes, result: { code: number, message: string }, ...resources: (Deno.Closer | undefined)[]) {
         if (result.code !== expected) {
-            let errors: any[] = [];
+            const errors: any[] = [];
             resources.forEach(v => {
                 if (v !== undefined) {
                     try {
