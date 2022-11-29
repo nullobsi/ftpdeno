@@ -259,6 +259,7 @@ export class FTPClient implements Deno.Closer {
     public async upload(fileName: string, data: Uint8Array) {
         const conn = await this.uploadStream(fileName, data.byteLength);
         await writeAll(conn, data);
+        await this.finalizeStream();
     }
 
     /**
