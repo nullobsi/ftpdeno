@@ -3,6 +3,7 @@ import {Commands, StatusCodes, Types} from "../util/enums.ts";
 import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
+import { iterateReader } from "https://deno.land/std@0.161.0/streams/conversion.ts";
 
 export class FTPClient implements Deno.Closer {
     private conn?: Deno.Conn;
@@ -106,10 +107,10 @@ export class FTPClient implements Deno.Closer {
 
     private static async recieve(reader: Deno.Reader) {
         // use async iterator to write chunks to data array
-        let iter = Deno.iter(reader);
+        const iter = iterateReader(reader);
         let data = new Uint8Array();
-        for await (let chunk of iter) {
-            let n = new Uint8Array(data.byteLength + chunk.byteLength);
+        for await (const chunk of iter) {
+            const n = new Uint8Array(data.byteLength + chunk.byteLength);
             n.set(data);
             n.set(chunk, data.byteLength);
             data = n;
@@ -126,7 +127,7 @@ export class FTPClient implements Deno.Closer {
             this.lock.unlock();
             throw FTPClient.notInit();
         }
-        let res = await this.command(Commands.PWD);
+        const res = await this.command(Commands.PWD);
         this.lock.unlock();
         if (res.code !== 257) {
             return {
@@ -134,7 +135,7 @@ export class FTPClient implements Deno.Closer {
                 ...res,
             }
         }
-        let r = Regexes.path.exec(res.message);
+        const r = Regexes.path.exec(res.message);
         if (r === null) {
             return {
                 result: null,
@@ -156,7 +157,7 @@ export class FTPClient implements Deno.Closer {
             this.lock.unlock();
             throw FTPClient.notInit();
         }
-        let res = await this.command(Commands.CWD, path);
+        const res = await this.command(Commands.CWD, path);
         this.lock.unlock();
         if (res.code !== 250) {
             return {
@@ -179,7 +180,7 @@ export class FTPClient implements Deno.Closer {
             this.lock.unlock();
             throw FTPClient.notInit();
         }
-        let res = await this.command(Commands.CdUp);
+        const res = await this.command(Commands.CdUp);
         this.lock.unlock();
         if (res.code !== 250) {
             return {
@@ -198,8 +199,8 @@ export class FTPClient implements Deno.Closer {
      * @param fileName
      */
     public async download(fileName: string) {
-        let conn = await this.downloadStream(fileName);
-        let data = await FTPClient.recieve(conn);
+        const conn = await this.downloadStream(fileName);
+        const data = await FTPClient.recieve(conn);
         await this.finalizeStream();
 
         return data;
@@ -218,7 +219,7 @@ export class FTPClient implements Deno.Closer {
         }
         await this.initializeDataConnection();
 
-        let res = await this.command(Commands.Retrieve, fileName);
+        const res = await this.command(Commands.Retrieve, fileName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         return await this.finalizeDataConnection();
@@ -255,13 +256,13 @@ export class FTPClient implements Deno.Closer {
         await this.initializeDataConnection();
 
         if (allocate !== undefined) {
-            let res = await this.command(Commands.Allocate, allocate.toString());
+            const res = await this.command(Commands.Allocate, allocate.toString());
             if (res.code !== 202 && res.code !== 200) {
                 this.assertStatus(StatusCodes.OK, res, this.activeListener, this.dataConn);
             }
         }
 
-        let res = await this.command(Commands.Store, fileName);
+        const res = await this.command(Commands.Store, fileName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         return await this.finalizeDataConnection();
@@ -274,7 +275,7 @@ export class FTPClient implements Deno.Closer {
     public async finalizeStream() {
         free(this.dataConn);
 
-        let res = await this.getStatus();
+        const res = await this.getStatus();
         this.assertStatus(StatusCodes.DataClose, res);
 
         this.lock.unlock();
@@ -513,7 +514,7 @@ export class FTPClient implements Deno.Closer {
         if (!this.conn) throw FTPClient.notInit();
 
         let s = "";
-        let iter = Deno.iter(this.conn);
+        let iter = iterateReader(this.conn);
 
         for await (let a of iter) {
             let decoded = this.decode.decode(a);
