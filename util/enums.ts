@@ -18,13 +18,18 @@ enum Commands {
     RMDIR = "RMD",
     MKDIR = "MKD",
     PWD = "PWD",
-    List = "NLST",
+    List = "LIST",
+    PlainList = "NLST",
+    ExList = "MLSD",
+    ExData = "MLST",
 
     Auth = "AUTH",
     Protection = "PROT",
 
     Size = "SIZE",
     ModifiedTime = "MDTM",
+
+    Features = "FEAT",
 }
 
 enum Types {

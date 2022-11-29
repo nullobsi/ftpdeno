@@ -3,6 +3,7 @@ import {Commands, StatusCodes, Types} from "../util/enums.ts";
 import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
+import {FeatMatrix, FEATURES} from "../types/FeatMatrix.ts";
 import { iterateReader } from "https://deno.land/std@0.161.0/streams/conversion.ts";
 
 export class FTPClient implements Deno.Closer {
@@ -14,10 +15,13 @@ export class FTPClient implements Deno.Closer {
     private encode = new TextEncoder();
     private decode = new TextDecoder();
 
+    private feats: FeatMatrix;
+
     private lock = new Lock();
 
     constructor(readonly host: string, opts?: ConnectionOptions) {
-        let n: IntConnOpts = {
+        this.feats = Object.fromEntries(FEATURES.map(v => [v,false])) as FeatMatrix;
+        const n: IntConnOpts = {
             mode: "passive",
             user: "anonymous",
             pass: "anonymous",
@@ -70,9 +74,43 @@ export class FTPClient implements Deno.Closer {
         let status = await this.getStatus();
         this.assertStatus(StatusCodes.Ready, status);
 
+        // Discover features
+        status = await this.command(Commands.Features);
+
+        let discoveredFeats = status.message.split("\r\n").map(a => a.trim());
+        this.feats = Object.fromEntries(FEATURES.map(feat => [feat, discoveredFeats.includes(feat)])) as FeatMatrix;
+
+        let mlst = discoveredFeats.find(v => v.startsWith("MLST"));
+        if (mlst) {
+            mlst = mlst.replace("MLST ", "");
+            this.feats.MLST = mlst.split(";");
+        } else {
+            this.feats.MLST = false;
+        }
+
+        let auth = discoveredFeats.find(v => v.startsWith("AUTH"));
+        if (auth) {
+            auth = auth.replace("AUTH ", "");
+            // TODO: is this right
+            this.feats.AUTH = auth.split(" ");
+        } else {
+            this.feats.AUTH = false;
+        }
+
+        let rest = discoveredFeats.find(v => v.startsWith("REST"));
+        if (rest) {
+            rest = rest.replace("REST ", "");
+            this.feats.REST = rest.split(" ");
+        } else {
+            this.feats.REST = false;
+        }
+
         //handle TLS handshake
         if (this.opts.tlsOpts) {
             if (!this.opts.tlsOpts.implicit) {
+                if (!this.feats.AUTH || !this.feats.AUTH.includes("TLS")) {
+                    console.warn("Server does not advertise STARTTLS yet it was requested.\nAttempting anyways...");
+                }
                 status = await this.command(Commands.Auth, "TLS");
                 this.assertStatus(StatusCodes.AuthProceed, status, this.conn);
             }
@@ -356,6 +394,10 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit();
         }
 
+        if (!this.feats.MDTM) {
+            throw new Error("Feature is missing.", {cause: "Feature MDTM is not implemented by the FTP server."});
+        }
+
         let res = await this.command(Commands.ModifiedTime, filename);
         this.assertStatus(StatusCodes.FileStat, res);
         this.lock.unlock();
@@ -469,7 +511,7 @@ export class FTPClient implements Deno.Closer {
 
         await this.initializeDataConnection();
 
-        let res = await this.command(Commands.List, dirName);
+        let res = await this.command(Commands.PlainList, dirName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener)
 
         let conn = await this.finalizeDataConnection();
