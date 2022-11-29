@@ -88,16 +88,16 @@ export class FTPClient implements Deno.Closer {
         }
 
         status = await this.command(Commands.User, this.opts.user);
-        this.assertStatus(StatusCodes.NeedPass, status, this.conn);
+        if (status.code != StatusCodes.LoggedIn) {
+            this.assertStatus(StatusCodes.NeedPass, status, this.conn);
 
-        status = await this.command(Commands.Password, this.opts.pass);
-        this.assertStatus(StatusCodes.LoggedIn, status, this.conn);
+            status = await this.command(Commands.Password, this.opts.pass);
+            this.assertStatus(StatusCodes.LoggedIn, status, this.conn);
+        }
 
         //Switch to binary mode
         status = await this.command(Commands.Type, Types.Binary);
         this.assertStatus(StatusCodes.OK, status, this.conn);
-
-        return;
     }
 
     private static notInit() {
