@@ -76,10 +76,11 @@ export class FTPClient implements Deno.Closer {
             port: this.opts.port,
         });
 
+        // 1. Wait for server hello message
         let status = await this.getStatus();
         this.assertStatus(StatusCodes.Ready, status);
 
-        // Discover features
+        // 2. Discover features
         status = await this.command(Commands.Features);
 
         const discoveredFeats = status.message.split("\r\n").map(a => a.trim());
@@ -110,7 +111,7 @@ export class FTPClient implements Deno.Closer {
             this.feats.REST = false;
         }
 
-        //handle TLS handshake
+        // 3. If requested, handle TLS handshake
         if (this.opts.tlsOpts) {
             if (!this.opts.tlsOpts.implicit) {
                 if (!this.feats.AUTH || !this.feats.AUTH.includes("TLS")) {
@@ -126,11 +127,15 @@ export class FTPClient implements Deno.Closer {
                 caCerts: this.opts.tlsOpts.caCerts,
             });
 
+            if (!this.feats.PROT) {
+                console.warn("Server does not advertise TLS streams yet it was requested.\nAttempting anyways...");
+            }
             //switch data channels to TLS
             status = await this.command(Commands.Protection, "P");
             this.assertStatus(StatusCodes.OK, status, this.conn);
         }
 
+        // 4. Attempt login
         status = await this.command(Commands.User, this.opts.user);
         if (status.code != StatusCodes.LoggedIn) {
             this.assertStatus(StatusCodes.NeedPass, status, this.conn);
@@ -139,7 +144,7 @@ export class FTPClient implements Deno.Closer {
             this.assertStatus(StatusCodes.LoggedIn, status, this.conn);
         }
 
-        //Switch to binary mode
+        // 5. Switch to binary mode
         status = await this.command(Commands.Type, Types.Binary);
         this.assertStatus(StatusCodes.OK, status, this.conn);
     }
@@ -155,23 +160,12 @@ export class FTPClient implements Deno.Closer {
         }
         const res = await this.command(Commands.PWD);
         this.lock.unlock();
-        if (res.code !== 257) {
-            return {
-                result: null,
-                ...res,
-            }
-        }
+        this.assertStatus(StatusCodes.DirCreated, res);
         const r = Regexes.path.exec(res.message);
         if (r === null) {
-            return {
-                result: null,
-                ...res,
-            }
+            throw {error: "Could not parse server response", ...res};
         }
-        return {
-            result: r[1],
-            ...res,
-        };
+        return r[1];
     }
 
     /**
@@ -185,16 +179,7 @@ export class FTPClient implements Deno.Closer {
         }
         const res = await this.command(Commands.CWD, path);
         this.lock.unlock();
-        if (res.code !== 250) {
-            return {
-                result: false,
-                ...res
-            };
-        }
-        return {
-            result: true,
-            ...res,
-        }
+        this.assertStatus(StatusCodes.ActionOK, res);
     }
 
     /**
@@ -208,16 +193,7 @@ export class FTPClient implements Deno.Closer {
         }
         const res = await this.command(Commands.CdUp);
         this.lock.unlock();
-        if (res.code !== 250) {
-            return {
-                result: false,
-                ...res
-            };
-        }
-        return {
-            result: true,
-            ...res,
-        }
+        this.assertStatus(StatusCodes.ActionOK, res);
     }
 
     /**
@@ -481,24 +457,8 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit()
         }
 
-        await this.initializeDataConnection();
-
-        let res = await this.command(Commands.PlainList, dirName);
-        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
-
-        const conn = await this.finalizeDataConnection();
-        const data = await readAll(conn);
-        free(conn);
-
-        res = await this.getStatus();
-        this.assertStatus(StatusCodes.DataClose, res);
-
-        this.lock.unlock();
-
-        let listing = this.decode.decode(data);
-        listing = listing.trimEnd();
-
-        return listing.split("\r\n");
+        const listing = await this.commandWithData(Commands.PlainList, dirName);
+        return listing.trimEnd().split("\r\n");
     }
 
     public async extendedList(dirName?: string) {
@@ -508,25 +468,8 @@ export class FTPClient implements Deno.Closer {
             throw FTPClient.notInit()
         }
 
-        await this.initializeDataConnection();
-
-        let res = await this.command(Commands.ExList, dirName);
-        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
-
-        const conn = await this.finalizeDataConnection();
-        const data = await readAll(conn);
-        free(conn);
-
-        res = await this.getStatus();
-        this.assertStatus(StatusCodes.DataClose, res);
-
-        this.lock.unlock();
-
-        let listing = this.decode.decode(data);
-        listing = listing.trimEnd();
-
-        const entries = listing.split("\r\n");
-
+        const listing = await this.commandWithData(Commands.ExList, dirName);
+        const entries = listing.trimEnd().split("\r\n");
         return entries.map(e => this.parseMLST(e));
     }
 
@@ -650,7 +593,23 @@ export class FTPClient implements Deno.Closer {
         const encoded = this.encode.encode(`${c.toString()}${args ? " " + args : ""}\r\n`);
         await this.conn.write(encoded);
         return await this.getStatus();
+    }
 
+    private async commandWithData(c: Commands, args?: string) {
+        await this.initializeDataConnection();
+        let res = await this.command(c, args);
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
+
+        const conn = await this.finalizeDataConnection();
+        const data = await readAll(conn);
+        free(conn);
+
+        res = await this.getStatus();
+        this.assertStatus(StatusCodes.DataClose, res);
+
+        this.lock.unlock();
+
+        return this.decode.decode(data);
     }
 
     //parse response from FTP control channel
@@ -738,7 +697,7 @@ export class FTPClient implements Deno.Closer {
     // check status or throw error
     private assertStatus(expected: StatusCodes, result: { code: number, message: string }, ...resources: (Deno.Closer | undefined)[]) {
         if (result.code !== expected) {
-            const errors: any[] = [];
+            const errors: Error[] = [];
             resources.forEach(v => {
                 if (v !== undefined) {
                     try {
