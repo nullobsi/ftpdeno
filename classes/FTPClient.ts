@@ -4,7 +4,7 @@ import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
 import {FeatMatrix, FEATURES} from "../types/FeatMatrix.ts";
-import {iterateReader} from "https://deno.land/std@0.161.0/streams/conversion.ts";
+import {iterateReader, readAll, writeAll} from "https://deno.land/std@0.166.0/streams/conversion.ts";
 import {FTPFileInfo} from "../types/FTPFileInfo.ts";
 
 export class FTPClient implements Deno.Closer {
@@ -21,7 +21,7 @@ export class FTPClient implements Deno.Closer {
     private lock = new Lock();
 
     constructor(readonly host: string, opts?: ConnectionOptions) {
-        this.feats = Object.fromEntries(FEATURES.map(v => [v, false])) as FeatMatrix;
+        this.feats = {} as FeatMatrix;
         const n: IntConnOpts = {
             mode: "passive",
             user: "anonymous",
@@ -65,19 +65,6 @@ export class FTPClient implements Deno.Closer {
 
     private static notInit() {
         return new Error("Connection not initialized!");
-    }
-
-    private static async recieve(reader: Deno.Reader) {
-        // use async iterator to write chunks to data array
-        const iter = iterateReader(reader);
-        let data = new Uint8Array();
-        for await (const chunk of iter) {
-            const n = new Uint8Array(data.byteLength + chunk.byteLength);
-            n.set(data);
-            n.set(chunk, data.byteLength);
-            data = n;
-        }
-        return data;
     }
 
     /**
@@ -238,8 +225,8 @@ export class FTPClient implements Deno.Closer {
      * @param fileName
      */
     public async download(fileName: string) {
-        const conn = await this.downloadStream(fileName);
-        const data = await FTPClient.recieve(conn);
+        const downloadConn = await this.downloadStream(fileName);
+        const data = await readAll(downloadConn);
         await this.finalizeStream();
 
         return data;
@@ -271,12 +258,7 @@ export class FTPClient implements Deno.Closer {
      */
     public async upload(fileName: string, data: Uint8Array) {
         const conn = await this.uploadStream(fileName, data.byteLength);
-        let written = await conn.write(data);
-        const maxSize = written;
-        for (let i = 0; i < data.byteLength / maxSize; i++)
-            written += await conn.write(data.slice(written));
-        await this.finalizeStream();
-        return written;
+        await writeAll(conn, data);
     }
 
     /**
@@ -504,7 +486,7 @@ export class FTPClient implements Deno.Closer {
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         const conn = await this.finalizeDataConnection();
-        const data = await FTPClient.recieve(conn);
+        const data = await readAll(conn);
         free(conn);
 
         res = await this.getStatus();
@@ -531,7 +513,7 @@ export class FTPClient implements Deno.Closer {
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         const conn = await this.finalizeDataConnection();
-        const data = await FTPClient.recieve(conn);
+        const data = await readAll(conn);
         free(conn);
 
         res = await this.getStatus();
