@@ -4,8 +4,10 @@ enum Commands {
     CdUp = "CDUP",
     CWD = "CWD",
     Quit = "QUIT",
-    ActiveConn = "EPRT",
-    PassiveConn = "EPSV",
+    Port = "PORT",
+    ExtendedPort = "EPRT",
+    PassiveConn = "PASV",
+    ExtendedPassive = "EPSV",
     Type = "TYPE",
 
     Retrieve = "RETR",

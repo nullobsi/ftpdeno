@@ -652,17 +652,30 @@ export class FTPClient implements Deno.Closer {
     // initialize data connections to server
     private async initializeDataConnection() {
         if (this.opts.mode === "passive") {
-            const res = await this.command(Commands.PassiveConn);
+            if (this.feats.EPSV) {
+                const res = await this.command(Commands.ExtendedPassive);
+                this.assertStatus(StatusCodes.ExtendedPassive, res);
 
-            this.assertStatus(StatusCodes.ExtendedPassive, res);
+                const parsed = Regexes.extendedPort.exec(res.message);
+                if (parsed === null || parsed.groups === undefined) throw res;
+                this.dataConn = await Deno.connect({
+                    port: parseInt(parsed.groups.port),
+                    hostname: this.host,
+                    transport: "tcp",
+                });
+            } else {
+                const res = await this.command(Commands.PassiveConn);
+                this.assertStatus(StatusCodes.Passive, res);
 
-            const parsed = Regexes.passivePort.exec(res.message);
-            if (parsed === null || parsed.groups === undefined) throw res;
-            this.dataConn = await Deno.connect({
-                port: parseInt(parsed.groups.port),
-                hostname: this.host,
-                transport: "tcp",
-            });
+                const parsed = Regexes.port.exec(res.message);
+                if (parsed === null) throw res;
+                this.dataConn = await Deno.connect({
+                    port: (parseInt(parsed[5]) << 8) + parseInt(parsed[6]),
+                    hostname: `${parsed[1]}.${parsed[2]}.${parsed[3]}.${parsed[4]}`,
+                    transport: "tcp",
+                });
+            }
+
         } else {
             const listener = await Deno.listen(
                 {
@@ -673,9 +686,18 @@ export class FTPClient implements Deno.Closer {
             );
             this.activeListener = listener;
 
-            const res = await this.command(Commands.ActiveConn, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
+            if (this.feats.EPRT) {
+                const res = await this.command(Commands.ExtendedPort, `|${this.opts.activeIpv6 ? "2" : "1"}|${this.opts.activeIp}|${this.opts.activePort}|`);
+                this.assertStatus(StatusCodes.OK, res, listener);
+            } else {
+                if (this.opts.activeIpv6) {
+                    throw new Error("Active mode requested with IPv6 but server does not support EPRT");
+                }
 
-            this.assertStatus(StatusCodes.OK, res, listener);
+                const res = await this.command(Commands.Port, `${this.opts.activeIp.replaceAll(".", ",")},${this.opts.activePort >> 8},${this.opts.activePort & 0x00FF}`);
+                this.assertStatus(StatusCodes.OK, res, listener);
+            }
+
         }
     }
 
