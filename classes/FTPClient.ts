@@ -4,7 +4,7 @@ import Lock from "./Lock.ts";
 import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
 import {FeatMatrix, FEATURES} from "../types/FeatMatrix.ts";
-import { iterateReader } from "https://deno.land/std@0.161.0/streams/conversion.ts";
+import {iterateReader} from "https://deno.land/std@0.161.0/streams/conversion.ts";
 import {FTPFileInfo} from "../types/FTPFileInfo.ts";
 
 export class FTPClient implements Deno.Closer {
@@ -21,7 +21,7 @@ export class FTPClient implements Deno.Closer {
     private lock = new Lock();
 
     constructor(readonly host: string, opts?: ConnectionOptions) {
-        this.feats = Object.fromEntries(FEATURES.map(v => [v,false])) as FeatMatrix;
+        this.feats = Object.fromEntries(FEATURES.map(v => [v, false])) as FeatMatrix;
         const n: IntConnOpts = {
             mode: "passive",
             user: "anonymous",
@@ -61,6 +61,23 @@ export class FTPClient implements Deno.Closer {
             }
         }
         this.opts = n;
+    }
+
+    private static notInit() {
+        return new Error("Connection not initialized!");
+    }
+
+    private static async recieve(reader: Deno.Reader) {
+        // use async iterator to write chunks to data array
+        const iter = iterateReader(reader);
+        let data = new Uint8Array();
+        for await (const chunk of iter) {
+            const n = new Uint8Array(data.byteLength + chunk.byteLength);
+            n.set(data);
+            n.set(chunk, data.byteLength);
+            data = n;
+        }
+        return data;
     }
 
     /**
@@ -138,23 +155,6 @@ export class FTPClient implements Deno.Closer {
         //Switch to binary mode
         status = await this.command(Commands.Type, Types.Binary);
         this.assertStatus(StatusCodes.OK, status, this.conn);
-    }
-
-    private static notInit() {
-        return new Error("Connection not initialized!");
-    }
-
-    private static async recieve(reader: Deno.Reader) {
-        // use async iterator to write chunks to data array
-        const iter = iterateReader(reader);
-        let data = new Uint8Array();
-        for await (const chunk of iter) {
-            const n = new Uint8Array(data.byteLength + chunk.byteLength);
-            n.set(data);
-            n.set(chunk, data.byteLength);
-            data = n;
-        }
-        return data;
     }
 
     /**
@@ -274,7 +274,7 @@ export class FTPClient implements Deno.Closer {
         let written = await conn.write(data);
         const maxSize = written;
         for (let i = 0; i < data.byteLength / maxSize; i++)
-          written += await conn.write(data.slice(written));
+            written += await conn.write(data.slice(written));
         await this.finalizeStream();
         return written;
     }
@@ -288,7 +288,7 @@ export class FTPClient implements Deno.Closer {
     public async uploadStream(fileName: string, allocate?: number) {
         await this.lock.lock();
         if (this.conn === undefined) {
-            this.lock.unlock()
+            this.lock.unlock();
             throw FTPClient.notInit();
         }
 
@@ -318,85 +318,6 @@ export class FTPClient implements Deno.Closer {
         this.assertStatus(StatusCodes.DataClose, res);
 
         this.lock.unlock();
-    }
-
-    // Return name, stat
-    private parseMLST(input: string): [string, FTPFileInfo] {
-        const retn: FTPFileInfo = {
-            charset: null, ftpType: null, ftpperms: null, lang: null, mediaType: null,
-            atime: null,
-            birthtime: null,
-            blksize: null,
-            blocks: null,
-            dev: null,
-            gid: null,
-            ino: null,
-            mode: null,
-            nlink: null,
-            rdev: null,
-            uid: null,
-
-            mtime: null,
-            ctime: null,
-            isSymlink: false,
-            isFile: true,
-            isDirectory: false,
-            size: 0
-        };
-        let data = input.trim().split(";");
-        let filename = data.pop();
-        if (filename) {
-            // Remove initial space
-            filename = filename.substring(1);
-        } else {
-            filename = "";
-        }
-
-        let fileStat = Object.fromEntries(data.map(v => v.split("=")));
-        if (fileStat.type) {
-            if (fileStat.type == "file") {
-                retn.isFile = true;
-                retn.isDirectory = false;
-            } else if (fileStat.type == "dir" || fileStat.type == "cdir" || fileStat.type == "pdir") {
-                retn.isDirectory = true;
-                retn.isFile = false;
-            }
-        }
-        if (fileStat.modify) {
-            retn.mtime = this.parseMDTM(fileStat.modify);
-        }
-        if (fileStat.create) {
-            retn.ctime = this.parseMDTM(fileStat.create);
-        }
-        if (fileStat.perm) {
-            // TODO: parse https://www.rfc-editor.org/rfc/rfc3659#section-7.1
-            retn.ftpperms = fileStat.perm;
-        }
-        if (fileStat.lang) {
-            retn.lang = fileStat.lang;
-        }
-        if (fileStat.size) {
-            retn.size = parseInt(fileStat.size);
-        }
-        if (fileStat["media-type"]) {
-            retn.mediaType = fileStat["media-type"]
-        }
-        if (fileStat.charset) {
-            retn.charset = fileStat.charset;
-        }
-        if (fileStat["UNIX.mode"]) {
-            retn.mode = parseInt(fileStat["UNIX.mode"]);
-        }
-        if (fileStat["UNIX.uid"]) {
-            retn.uid = parseInt(fileStat["UNIX.uid"]);
-        }
-        if (fileStat["UNIX.gid"]) {
-            retn.gid = parseInt(fileStat["UNIX.gid"]);
-        }
-        if (fileStat.type) {
-            retn.ftpType = fileStat.type;
-        }
-        return [filename, retn];
     }
 
     /**
@@ -470,28 +391,6 @@ export class FTPClient implements Deno.Closer {
         return parseInt(res.message);
     }
 
-    private parseMDTM(date: string): Date {
-        let parsed = Regexes.mdtmReply.exec(date);
-        if (parsed && parsed.groups) {
-            let year = parseInt(parsed.groups.year);
-            // Annoyingly, months are zero indexed
-            let month = parseInt(parsed.groups.month)-1;
-            let day = parseInt(parsed.groups.day);
-            let hour = parseInt(parsed.groups.hour);
-            let minute = parseInt(parsed.groups.minute);
-            let second = parseInt(parsed.groups.second);
-            let ms = parsed.groups.ms;
-            let date = new Date(year, month, day, hour, minute, second);
-            if (ms !== undefined) {
-                let n = parseFloat(ms);
-                date.setMilliseconds(n*1000);
-            }
-            return date;
-        } else {
-            throw new Error("Date is not in expected format.");
-        }
-    }
-
     /**
      * Get file modification time.
      * @param filename
@@ -513,7 +412,6 @@ export class FTPClient implements Deno.Closer {
 
         return this.parseMDTM(res.message);
     }
-
 
     /**
      * Rename a file on the server.
@@ -603,7 +501,7 @@ export class FTPClient implements Deno.Closer {
         await this.initializeDataConnection();
 
         let res = await this.command(Commands.PlainList, dirName);
-        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener)
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         let conn = await this.finalizeDataConnection();
         let data = await FTPClient.recieve(conn);
@@ -615,7 +513,7 @@ export class FTPClient implements Deno.Closer {
         this.lock.unlock();
 
         let listing = this.decode.decode(data);
-        listing = listing.trimEnd()
+        listing = listing.trimEnd();
 
         return listing.split("\r\n");
     }
@@ -630,7 +528,7 @@ export class FTPClient implements Deno.Closer {
         await this.initializeDataConnection();
 
         let res = await this.command(Commands.ExList, dirName);
-        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener)
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         let conn = await this.finalizeDataConnection();
         let data = await FTPClient.recieve(conn);
@@ -642,7 +540,7 @@ export class FTPClient implements Deno.Closer {
         this.lock.unlock();
 
         let listing = this.decode.decode(data);
-        listing = listing.trimEnd()
+        listing = listing.trimEnd();
 
         let entries = listing.split("\r\n");
 
@@ -660,12 +558,113 @@ export class FTPClient implements Deno.Closer {
         this.lock.unlock();
     }
 
+    // Return name, stat
+    private parseMLST(input: string): [string, FTPFileInfo] {
+        const retn: FTPFileInfo = {
+            charset: null, ftpType: null, ftpperms: null, lang: null, mediaType: null,
+            atime: null,
+            birthtime: null,
+            blksize: null,
+            blocks: null,
+            dev: null,
+            gid: null,
+            ino: null,
+            mode: null,
+            nlink: null,
+            rdev: null,
+            uid: null,
+
+            mtime: null,
+            ctime: null,
+            isSymlink: false,
+            isFile: true,
+            isDirectory: false,
+            size: 0
+        };
+        let data = input.trim().split(";");
+        let filename = data.pop();
+        if (filename) {
+            // Remove initial space
+            filename = filename.substring(1);
+        } else {
+            filename = "";
+        }
+
+        let fileStat = Object.fromEntries(data.map(v => v.split("=")));
+        if (fileStat.type) {
+            if (fileStat.type == "file") {
+                retn.isFile = true;
+                retn.isDirectory = false;
+            } else if (fileStat.type == "dir" || fileStat.type == "cdir" || fileStat.type == "pdir") {
+                retn.isDirectory = true;
+                retn.isFile = false;
+            }
+        }
+        if (fileStat.modify) {
+            retn.mtime = this.parseMDTM(fileStat.modify);
+        }
+        if (fileStat.create) {
+            retn.ctime = this.parseMDTM(fileStat.create);
+        }
+        if (fileStat.perm) {
+            // TODO: parse https://www.rfc-editor.org/rfc/rfc3659#section-7.1
+            retn.ftpperms = fileStat.perm;
+        }
+        if (fileStat.lang) {
+            retn.lang = fileStat.lang;
+        }
+        if (fileStat.size) {
+            retn.size = parseInt(fileStat.size);
+        }
+        if (fileStat["media-type"]) {
+            retn.mediaType = fileStat["media-type"]
+        }
+        if (fileStat.charset) {
+            retn.charset = fileStat.charset;
+        }
+        if (fileStat["UNIX.mode"]) {
+            retn.mode = parseInt(fileStat["UNIX.mode"]);
+        }
+        if (fileStat["UNIX.uid"]) {
+            retn.uid = parseInt(fileStat["UNIX.uid"]);
+        }
+        if (fileStat["UNIX.gid"]) {
+            retn.gid = parseInt(fileStat["UNIX.gid"]);
+        }
+        if (fileStat.type) {
+            retn.ftpType = fileStat.type;
+        }
+        return [filename, retn];
+    }
+
+    private parseMDTM(date: string): Date {
+        let parsed = Regexes.mdtmReply.exec(date);
+        if (parsed && parsed.groups) {
+            let year = parseInt(parsed.groups.year);
+            // Annoyingly, months are zero indexed
+            let month = parseInt(parsed.groups.month) - 1;
+            let day = parseInt(parsed.groups.day);
+            let hour = parseInt(parsed.groups.hour);
+            let minute = parseInt(parsed.groups.minute);
+            let second = parseInt(parsed.groups.second);
+            let ms = parsed.groups.ms;
+            let date = new Date(year, month, day, hour, minute, second);
+            if (ms !== undefined) {
+                let n = parseFloat(ms);
+                date.setMilliseconds(n * 1000);
+            }
+            return date;
+        } else {
+            throw new Error("Date is not in expected format.");
+        }
+    }
+
     // execute an FTP command
     private async command(c: Commands, args?: string) {
         if (!this.conn) {
             throw new Error("Connection not initialized!");
         }
-        let encoded = this.encode.encode(`${c.toString()}${args ? " " + args : ""}\r\n`)
+        let encoded = this.encode.encode(`${c.toString()}${args ? " " + args : ""}\r\n`);
         await this.conn.write(encoded);
         return await this.getStatus();
 
@@ -690,7 +689,7 @@ export class FTPClient implements Deno.Closer {
                 if (i !== -1) {
                     let pi = s.lastIndexOf("\r\n", i - 1);
                     let lastLine = s.substring(pi + 2, i);
-                    if (lastLine.startsWith(s.substr(0,3))) {
+                    if (lastLine.startsWith(s.substr(0, 3))) {
                         break;
                     }
                 }
