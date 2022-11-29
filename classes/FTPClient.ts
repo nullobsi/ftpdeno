@@ -5,6 +5,7 @@ import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
 import {FeatMatrix, FEATURES} from "../types/FeatMatrix.ts";
 import { iterateReader } from "https://deno.land/std@0.161.0/streams/conversion.ts";
+import {FTPFileInfo} from "../types/FTPFileInfo.ts";
 
 export class FTPClient implements Deno.Closer {
     private conn?: Deno.Conn;
@@ -319,14 +320,10 @@ export class FTPClient implements Deno.Closer {
         this.lock.unlock();
     }
 
-    //naive way of doing this but there isn't really another way that works on everything
-    //TODO: use feat command and use MLST if available
-    /**
-     * Obtain file information from the FTP server.
-     * @param filename
-     */
-    public async stat(filename: string): Promise<Deno.FileInfo> {
-        let retn: Deno.FileInfo = {
+    // Return name, stat
+    private parseMLST(input: string): [string, FTPFileInfo] {
+        const retn: FTPFileInfo = {
+            charset: null, ftpType: null, ftpperms: null, lang: null, mediaType: null,
             atime: null,
             birthtime: null,
             blksize: null,
@@ -340,26 +337,116 @@ export class FTPClient implements Deno.Closer {
             uid: null,
 
             mtime: null,
+            ctime: null,
             isSymlink: false,
             isFile: true,
             isDirectory: false,
             size: 0
+        };
+        let data = input.trim().split(";");
+        let filename = data.pop();
+        if (filename) {
+            // Remove initial space
+            filename = filename.substring(1);
+        } else {
+            filename = "";
         }
 
-
-        try {
-            retn.size = await this.size(filename);
-        } catch (e) {
-            if (e.code !== 550) {
-                throw e;
-            } else {
+        let fileStat = Object.fromEntries(data.map(v => v.split("=")));
+        if (fileStat.type) {
+            if (fileStat.type == "file") {
+                retn.isFile = true;
+                retn.isDirectory = false;
+            } else if (fileStat.type == "dir" || fileStat.type == "cdir" || fileStat.type == "pdir") {
                 retn.isDirectory = true;
                 retn.isFile = false;
             }
         }
+        if (fileStat.modify) {
+            retn.mtime = this.parseMDTM(fileStat.modify);
+        }
+        if (fileStat.create) {
+            retn.ctime = this.parseMDTM(fileStat.create);
+        }
+        if (fileStat.perm) {
+            // TODO: parse https://www.rfc-editor.org/rfc/rfc3659#section-7.1
+            retn.ftpperms = fileStat.perm;
+        }
+        if (fileStat.lang) {
+            retn.lang = fileStat.lang;
+        }
+        if (fileStat.size) {
+            retn.size = parseInt(fileStat.size);
+        }
+        if (fileStat["media-type"]) {
+            retn.mediaType = fileStat["media-type"]
+        }
+        if (fileStat.charset) {
+            retn.charset = fileStat.charset;
+        }
+        if (fileStat["UNIX.mode"]) {
+            retn.mode = parseInt(fileStat["UNIX.mode"]);
+        }
+        if (fileStat["UNIX.uid"]) {
+            retn.uid = parseInt(fileStat["UNIX.uid"]);
+        }
+        if (fileStat["UNIX.gid"]) {
+            retn.gid = parseInt(fileStat["UNIX.gid"]);
+        }
+        if (fileStat.type) {
+            retn.ftpType = fileStat.type;
+        }
+        return [filename, retn];
+    }
 
-        if (retn.isFile) {
-            retn.mtime = await this.modified(filename);
+    /**
+     * Obtain file information from the FTP server.
+     * @param filename
+     */
+    public async stat(filename: string): Promise<FTPFileInfo> {
+        const retn: FTPFileInfo = {
+            charset: null, ftpType: null, ftpperms: null, lang: null, mediaType: null,
+            atime: null,
+            birthtime: null,
+            blksize: null,
+            blocks: null,
+            dev: null,
+            gid: null,
+            ino: null,
+            mode: null,
+            nlink: null,
+            rdev: null,
+            uid: null,
+
+            mtime: null,
+            ctime: null,
+            isSymlink: false,
+            isFile: true,
+            isDirectory: false,
+            size: 0
+        };
+
+        if (this.feats.MLST) {
+            let status = await this.command(Commands.ExData, filename);
+            this.assertStatus(StatusCodes.ActionOK, status);
+
+            const entry = status.message.split("\r\n")[1];
+            return this.parseMLST(entry)[1];
+        } else {
+            try {
+                retn.size = await this.size(filename);
+            } catch (e) {
+                if (e.code !== StatusCodes.FileUnknown) {
+                    throw e;
+                } else {
+                    retn.isDirectory = true;
+                    retn.isFile = false;
+                }
+            }
+
+            if (retn.isFile) {
+                retn.mtime = await this.modified(filename);
+            }
         }
 
         return retn;
@@ -383,6 +470,28 @@ export class FTPClient implements Deno.Closer {
         return parseInt(res.message);
     }
 
+    private parseMDTM(date: string): Date {
+        let parsed = Regexes.mdtmReply.exec(date);
+        if (parsed && parsed.groups) {
+            let year = parseInt(parsed.groups.year);
+            // Annoyingly, months are zero indexed
+            let month = parseInt(parsed.groups.month)-1;
+            let day = parseInt(parsed.groups.day);
+            let hour = parseInt(parsed.groups.hour);
+            let minute = parseInt(parsed.groups.minute);
+            let second = parseInt(parsed.groups.second);
+            let ms = parsed.groups.ms;
+            let date = new Date(year, month, day, hour, minute, second);
+            if (ms !== undefined) {
+                let n = parseFloat(ms);
+                date.setMilliseconds(n*1000);
+            }
+            return date;
+        } else {
+            throw new Error("Date is not in expected format.");
+        }
+    }
+
     /**
      * Get file modification time.
      * @param filename
@@ -402,25 +511,7 @@ export class FTPClient implements Deno.Closer {
         this.assertStatus(StatusCodes.FileStat, res);
         this.lock.unlock();
 
-        let parsed = Regexes.mdtmReply.exec(res.message);
-        if (parsed && parsed.groups) {
-            console.log(parsed.groups);
-            let year = parseInt(parsed.groups.year);
-            let month = parseInt(parsed.groups.month);
-            let day = parseInt(parsed.groups.day);
-            let hour = parseInt(parsed.groups.hour);
-            let minute = parseInt(parsed.groups.minute);
-            let second = parseInt(parsed.groups.second);
-            let ms = parsed.groups.ms;
-            let date = new Date(year, month, day, hour, minute, second);
-            if (ms !== undefined) {
-                let n = parseFloat(ms);
-                date.setMilliseconds(n*1000);
-            }
-            return date;
-        } else {
-            throw res;
-        }
+        return this.parseMDTM(res.message);
     }
 
 
@@ -527,6 +618,35 @@ export class FTPClient implements Deno.Closer {
         listing = listing.trimEnd()
 
         return listing.split("\r\n");
+    }
+
+    public async extendedList(dirName?: string) {
+        await this.lock.lock();
+        if (this.conn === undefined) {
+            this.lock.unlock();
+            throw FTPClient.notInit()
+        }
+
+        await this.initializeDataConnection();
+
+        let res = await this.command(Commands.ExList, dirName);
+        this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener)
+
+        let conn = await this.finalizeDataConnection();
+        let data = await FTPClient.recieve(conn);
+        free(conn);
+
+        res = await this.getStatus();
+        this.assertStatus(StatusCodes.DataClose, res);
+
+        this.lock.unlock();
+
+        let listing = this.decode.decode(data);
+        listing = listing.trimEnd()
+
+        let entries = listing.split("\r\n");
+
+        return entries.map(e => this.parseMLST(e));
     }
 
     /**
