@@ -6,6 +6,7 @@ import free from "../util/free.ts";
 import {FeatMatrix, FEATURES} from "../types/FeatMatrix.ts";
 import {iterateReader, readAll, writeAll} from "https://deno.land/std@0.166.0/streams/conversion.ts";
 import {FTPFileInfo} from "../types/FTPFileInfo.ts";
+import FTPReply from "../types/FTPReply.ts";
 
 export class FTPClient implements Deno.Closer {
     private conn?: Deno.Conn;
@@ -469,7 +470,13 @@ export class FTPClient implements Deno.Closer {
         }
 
         const listing = await this.commandWithData(Commands.ExList, dirName);
-        const entries = listing.trimEnd().split("\r\n");
+        const entries = listing.split("\r\n");
+
+        // Discard last entry, as it is usually "" from last newline
+        if (entries[entries.length - 1].length === 0) {
+            entries.pop();
+        }
+
         return entries.map(e => this.parseMLST(e));
     }
 
@@ -507,7 +514,7 @@ export class FTPClient implements Deno.Closer {
             isDirectory: false,
             size: 0
         };
-        const data = input.trim().split(";");
+        const data = input.split(";");
         let filename = data.pop();
         if (filename) {
             // Remove initial space
@@ -516,7 +523,13 @@ export class FTPClient implements Deno.Closer {
             filename = "";
         }
 
-        const fileStat = Object.fromEntries(data.map(v => v.split("=")));
+        // No, I will not rewrite this.
+        const fileStat = Object.fromEntries(
+            // Lowercase the key.
+            // Some implementations use lowercase or Uppercase keys.
+            data.map(v => v.split("=")).map(a => [a[0].toLowerCase(), a[1]])
+        );
+
         if (fileStat.type) {
             if (fileStat.type == "file") {
                 retn.isFile = true;
@@ -548,14 +561,14 @@ export class FTPClient implements Deno.Closer {
         if (fileStat.charset) {
             retn.charset = fileStat.charset;
         }
-        if (fileStat["UNIX.mode"]) {
-            retn.mode = parseInt(fileStat["UNIX.mode"]);
+        if (fileStat["unix.mode"]) {
+            retn.mode = parseInt(fileStat["unix.mode"]);
         }
-        if (fileStat["UNIX.uid"]) {
-            retn.uid = parseInt(fileStat["UNIX.uid"]);
+        if (fileStat["unix.uid"]) {
+            retn.uid = parseInt(fileStat["unix.uid"]);
         }
-        if (fileStat["UNIX.gid"]) {
-            retn.gid = parseInt(fileStat["UNIX.gid"]);
+        if (fileStat["unix.gid"]) {
+            retn.gid = parseInt(fileStat["unix.gid"]);
         }
         if (fileStat.type) {
             retn.ftpType = fileStat.type;
@@ -613,7 +626,7 @@ export class FTPClient implements Deno.Closer {
     }
 
     //parse response from FTP control channel
-    private async getStatus() {
+    private async getStatus(): FTPReply {
         if (!this.conn) throw FTPClient.notInit();
 
         let s = "";
@@ -648,6 +661,25 @@ export class FTPClient implements Deno.Closer {
 
     }
 
+    private async epasvStart(res: FTPReply) {
+        const parsed = Regexes.extendedPort.exec(res.message);
+        if (parsed === null || parsed.groups === undefined) throw res;
+        this.dataConn = await Deno.connect({
+            port: parseInt(parsed.groups.port),
+            hostname: this.host,
+            transport: "tcp",
+        });
+    }
+
+    private async pasvStart(res: FTPReply) {
+        const parsed = Regexes.port.exec(res.message);
+        if (parsed === null) throw res;
+        this.dataConn = await Deno.connect({
+            port: (parseInt(parsed[5]) << 8) + parseInt(parsed[6]),
+            hostname: `${parsed[1]}.${parsed[2]}.${parsed[3]}.${parsed[4]}`,
+            transport: "tcp",
+        });
+    }
 
     // initialize data connections to server
     private async initializeDataConnection() {
@@ -655,25 +687,19 @@ export class FTPClient implements Deno.Closer {
             if (this.feats.EPSV) {
                 const res = await this.command(Commands.ExtendedPassive);
                 this.assertStatus(StatusCodes.ExtendedPassive, res);
-
-                const parsed = Regexes.extendedPort.exec(res.message);
-                if (parsed === null || parsed.groups === undefined) throw res;
-                this.dataConn = await Deno.connect({
-                    port: parseInt(parsed.groups.port),
-                    hostname: this.host,
-                    transport: "tcp",
-                });
+                await this.epasvStart(res);
             } else {
                 const res = await this.command(Commands.PassiveConn);
-                this.assertStatus(StatusCodes.Passive, res);
 
-                const parsed = Regexes.port.exec(res.message);
-                if (parsed === null) throw res;
-                this.dataConn = await Deno.connect({
-                    port: (parseInt(parsed[5]) << 8) + parseInt(parsed[6]),
-                    hostname: `${parsed[1]}.${parsed[2]}.${parsed[3]}.${parsed[4]}`,
-                    transport: "tcp",
-                });
+                // Some evil fucker decided PASV should return EPSV.
+                // Sometimes.
+                if (res.code === StatusCodes.ExtendedPassive) {
+                    await this.epasvStart(res);
+                } else if (res.code === StatusCodes.Passive) {
+                    await this.pasvStart(res);
+                } else {
+                    this.assertStatus(StatusCodes.Passive, res);
+                }
             }
 
         } else {
@@ -717,7 +743,7 @@ export class FTPClient implements Deno.Closer {
     }
 
     // check status or throw error
-    private assertStatus(expected: StatusCodes, result: { code: number, message: string }, ...resources: (Deno.Closer | undefined)[]) {
+    private assertStatus(expected: StatusCodes, result: FTPReply, ...resources: (Deno.Closer | undefined)[]) {
         if (result.code !== expected) {
             const errors: Error[] = [];
             resources.forEach(v => {
