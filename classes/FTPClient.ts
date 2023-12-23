@@ -5,21 +5,23 @@ import * as Regexes from "../util/regexes.ts";
 import free from "../util/free.ts";
 import { FeatMatrix, FEATURES } from "../types/FeatMatrix.ts";
 import {
-	iterateReader,
-	readAll,
-	writeAll,
-} from "https://deno.land/std@0.166.0/streams/conversion.ts";
+	toArrayBuffer,
+	toText,
+	TextLineStream,
+} from "https://deno.land/std@0.210.0/streams/mod.ts";
 import { FTPFileInfo } from "../types/FTPFileInfo.ts";
 import FTPReply from "../types/FTPReply.ts";
 
 export class FTPClient implements Deno.Closer {
 	private conn?: Deno.Conn;
+	private connLineReader?: ReadableStream<string>;
+
 	private dataConn?: Deno.Conn;
+
 	private activeListener?: Deno.Listener;
 
 	private opts: IntConnOpts;
 	private encode = new TextEncoder();
-	private decode = new TextDecoder();
 
 	private feats: FeatMatrix;
 
@@ -218,19 +220,21 @@ export class FTPClient implements Deno.Closer {
 	 * @param fileName
 	 */
 	public async download(fileName: string) {
-		const downloadConn = await this.downloadStream(fileName);
-		const data = await readAll(downloadConn);
+
+		const readable = await this.downloadReadable(fileName);
+		const data = await toArrayBuffer(readable);
+
 		await this.finalizeStream();
 
-		return data;
+		return new Uint8Array(data);
 	}
 
 	/**
-	 * Download a file from the server with streaming.
-	 * **Please call FTPClient.finalizeStream()** to release the lock after the file is done downloading.
-	 * @param fileName
+	 * Download a file from the server using a ReadableStream interface.
+	 * **Please call FTPClient.finalizeStream** to release the lock
+	 * after the file is downloaded.
 	 */
-	public async downloadStream(fileName: string): Promise<Deno.Reader> {
+	public async downloadReadable(fileName: string): Promise<ReadableStream> {
 		await this.lock.lock();
 		if (this.conn === undefined) {
 			this.lock.unlock();
@@ -252,8 +256,24 @@ export class FTPClient implements Deno.Closer {
 			);
 		}
 
+		const conn = await this.finalizeDataConnection();
+		return conn.readable;
+	}
 
-		return await this.finalizeDataConnection();
+	/**
+	 * Download a file from the server with streaming.
+	 * **Please call FTPClient.finalizeStream()** to release the lock after the file is done downloading.
+	 * @deprecated Use downloadReadable instead.
+	 * @param fileName
+	 */
+	public async downloadStream(fileName: string): Promise<Deno.Reader> {
+		await this.downloadReadable(fileName);
+
+		if (!this.dataConn) {
+			throw new Error("Could not get download stream!");
+		}
+
+		return this.dataConn;
 	}
 
 	/**
@@ -262,18 +282,22 @@ export class FTPClient implements Deno.Closer {
 	 * @param data
 	 */
 	public async upload(fileName: string, data: Uint8Array) {
-		const conn = await this.uploadStream(fileName, data.byteLength);
-		await writeAll(conn, data);
+		const writable = await this.uploadWritable(fileName, data.byteLength);
+		const writer = writable.getWriter();
+
+		await writer.write(data);
+
 		await this.finalizeStream();
 	}
 
 	/**
-	 * Upload a file to the server, with streaming.
-	 * **Please call FTPClient.finalizeStream()** to release the lock after the file is done downloading.**
+	 * Upload a file using a WritableStream interface.
+	 * **Please call FTPClient.finalizeStream()** to release the lock after
+	 * the file is uploaded.
 	 * @param fileName
 	 * @param allocate Number of bytes to allocate to the file. Some servers require this parameter.
 	 */
-	public async uploadStream(fileName: string, allocate?: number) {
+	public async uploadWritable(fileName: string, allocate?: number): Promise<WritableStream> {
 		await this.lock.lock();
 		if (this.conn === undefined) {
 			this.lock.unlock();
@@ -308,7 +332,26 @@ export class FTPClient implements Deno.Closer {
 			);
 		}
 
-		return await this.finalizeDataConnection();
+		const conn = await this.finalizeDataConnection();
+
+		return conn.writable;
+	}
+
+	/**
+	 * Upload a file to the server, with streaming.
+	 * **Please call FTPClient.finalizeStream()** to release the lock after the file is done downloading.**
+	 * @param fileName
+	 * @param allocate Number of bytes to allocate to the file. Some servers require this parameter.
+	 * @deprecated Use uploadWritable instead.
+	 */
+	public async uploadStream(fileName: string, allocate?: number): Promise<Deno.Writer> {
+		await this.uploadWritable(fileName, allocate);
+
+		if (!this.dataConn) {
+			throw new Error("Failed to get upload channel!");
+		}
+
+		return this.dataConn;
 	}
 
 	/**
@@ -316,6 +359,7 @@ export class FTPClient implements Deno.Closer {
 	 */
 	public async finalizeStream() {
 		free(this.dataConn);
+		this.dataConn = undefined;
 
 		const res = await this.getStatus();
 		this.assertStatus(StatusCodes.DataClose, res);
@@ -338,13 +382,18 @@ export class FTPClient implements Deno.Closer {
 			birthtime: null,
 			blksize: null,
 			blocks: null,
-			dev: null,
+			dev: NaN,
 			gid: null,
 			ino: null,
 			mode: null,
 			nlink: null,
 			rdev: null,
 			uid: null,
+
+			isBlockDevice: null,
+			isFifo: null,
+			isSocket: null,
+			isCharDevice: null,
 
 			mtime: null,
 			ctime: null,
@@ -552,13 +601,18 @@ export class FTPClient implements Deno.Closer {
 			birthtime: null,
 			blksize: null,
 			blocks: null,
-			dev: null,
+			dev: NaN,
 			gid: null,
 			ino: null,
 			mode: null,
 			nlink: null,
 			rdev: null,
 			uid: null,
+
+			isCharDevice: null,
+			isFifo: null,
+			isSocket: null,
+			isBlockDevice: null,
 
 			mtime: null,
 			ctime: null,
@@ -664,7 +718,12 @@ export class FTPClient implements Deno.Closer {
 		const encoded = this.encode.encode(
 			`${c.toString()}${args ? " " + args : ""}\r\n`,
 		);
-		await this.conn.write(encoded);
+
+		const writer = this.conn.writable.getWriter();
+		await writer.write(encoded);
+
+		writer.releaseLock();
+
 		return await this.getStatus();
 	}
 
@@ -682,7 +741,8 @@ export class FTPClient implements Deno.Closer {
 		}
 
 		const conn = await this.finalizeDataConnection();
-		const data = await readAll(conn);
+		const text = await toText(conn.readable);
+
 		free(conn);
 
 		res = await this.getStatus();
@@ -690,36 +750,40 @@ export class FTPClient implements Deno.Closer {
 
 		this.lock.unlock();
 
-		return this.decode.decode(data);
+		return text;
 	}
 
 	//parse response from FTP control channel
 	private async getStatus(): Promise<FTPReply> {
 		if (!this.conn) throw FTPClient.notInit();
+		
+		if (!this.connLineReader) {
+			this.connLineReader = this.conn.readable
+				.pipeThrough(new TextDecoderStream())
+				.pipeThrough(new TextLineStream());
+		}
 
-		let s = "";
-		const iter = iterateReader(this.conn);
-
-		for await (const a of iter) {
-			const decoded = this.decode.decode(a);
-			s += decoded;
-			if (s[3] !== "-") {
-				if (s.endsWith("\r\n")) {
+		const lines: string[] = [];
+		for await (const line of this.connLineReader.values({ preventCancel: true })) {
+			lines.push(line);
+			if (lines.length > 1) {
+				// Status Code + SPACE signifies end.
+				if (line.startsWith(lines[0].substring(0,3) + " ")) {
 					break;
 				}
-			} else {
-				const i = s.lastIndexOf("\r\n");
-				if (i !== -1) {
-					const pi = s.lastIndexOf("\r\n", i - 1);
-					const lastLine = s.substring(pi + 2, i);
-					if (lastLine.startsWith(s.substring(0, 3))) {
-						break;
-					}
-				}
 			}
+			// Not a multi-line message. Continue.
+			else if (lines[0][3] !== "-") break;
 		}
-		const statusCode = parseInt(s.substring(0, 3));
-		const message = s.length > 3 ? s.substring(4).trimEnd() : "";
+
+		const statusCode = parseInt(lines[0].substring(0, 3));
+
+		if (lines.length > 1) {
+			const lastLine = lines[lines.length - 1];
+			lines[lines.length - 1] = lastLine.slice(4);
+		}
+
+		const message = lines.join("\r\n").slice(4);
 
 		return {
 			code: statusCode,

@@ -1,23 +1,22 @@
 // Requires --allow-net and --allow-write
-import { FTPClient } from "https://deno.land/x/ftpc/mod.ts";
+import { FTPClient } from "../mod.ts";
 
 // Connect as anonymous user
-let client = new FTPClient("speedtest.tele2.net");
+const client = new FTPClient("speedtest.tele2.net");
 await client.connect();
 console.log("Connected!");
 
 // Download test file
 console.log("Downloading...");
-let file = await Deno.open("./5MB.zip", {
+const file = await Deno.open("./5MB.zip", {
 	create: true,
 	write: true,
 });
-let stream = await client.downloadStream("5MB.zip");
-await Deno.copy(stream, file);
+const stream = await client.downloadReadable("5MB.zip");
+await stream.pipeTo(file.writable);
 
-// Close download stream
+// Close download stream. File is already closed by pipeTo method.
 await client.finalizeStream();
-file.close();
 console.log("Finished!");
 
 // Log off server
