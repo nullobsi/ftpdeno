@@ -239,12 +239,19 @@ export class FTPClient implements Deno.Closer {
 		await this.initializeDataConnection();
 
 		const res = await this.command(Commands.Retrieve, fileName);
-		this.assertStatus(
-			StatusCodes.StartTransferConnection,
-			res,
-			this.dataConn,
-			this.activeListener,
-		);
+
+		// #9 Seems there might be two possible codes, but since data
+		// connection is already initialized, StartingTransfer (125)
+		// seems more appropriate.
+		if (res.code != StatusCodes.StartTransferConnection && res.code != StatusCodes.StartingTransfer) {
+			this.assertStatus(
+				StatusCodes.StartingTransfer,
+				res,
+				this.dataConn,
+				this.activeListener,
+			);
+		}
+
 
 		return await this.finalizeDataConnection();
 	}
@@ -291,12 +298,15 @@ export class FTPClient implements Deno.Closer {
 		}
 
 		const res = await this.command(Commands.Store, fileName);
-		this.assertStatus(
-			StatusCodes.StartTransferConnection,
-			res,
-			this.dataConn,
-			this.activeListener,
-		);
+
+		if (res.code != StatusCodes.StartTransferConnection && res.code != StatusCodes.StartingTransfer) {
+			this.assertStatus(
+				StatusCodes.StartTransferConnection,
+				res,
+				this.dataConn,
+				this.activeListener,
+			);
+		}
 
 		return await this.finalizeDataConnection();
 	}
@@ -661,12 +671,15 @@ export class FTPClient implements Deno.Closer {
 	private async commandWithData(c: Commands, args?: string) {
 		await this.initializeDataConnection();
 		let res = await this.command(c, args);
-		this.assertStatus(
-			StatusCodes.StartTransferConnection,
-			res,
-			this.dataConn,
-			this.activeListener,
-		);
+
+		if (res.code != StatusCodes.StartTransferConnection && res.code != StatusCodes.StartingTransfer) {
+			this.assertStatus(
+				StatusCodes.StartTransferConnection,
+				res,
+				this.dataConn,
+				this.activeListener,
+			);
+		}
 
 		const conn = await this.finalizeDataConnection();
 		const data = await readAll(conn);
