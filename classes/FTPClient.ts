@@ -12,7 +12,7 @@ import {
 import { FTPFileInfo } from "../types/FTPFileInfo.ts";
 import FTPReply from "../types/FTPReply.ts";
 
-export class FTPClient implements Deno.Closer {
+export class FTPClient implements AsyncDisposable, Disposable {
 	private conn?: Deno.Conn;
 	private connLineReader?: ReadableStream<string>;
 
@@ -72,6 +72,15 @@ export class FTPClient implements Deno.Closer {
 			}
 		}
 		this.opts = n;
+	}
+
+	// Not sure if implementing both is the way to go...
+	[Symbol.dispose](): void {
+		this.close();
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.close();
 	}
 
 	private static notInit() {
@@ -232,9 +241,10 @@ export class FTPClient implements Deno.Closer {
 	/**
 	 * Download a file from the server using a ReadableStream interface.
 	 * **Please call FTPClient.finalizeStream** to release the lock
-	 * after the file is downloaded.
+	 * after the file is downloaded. Or, you can use the AsyncDispoable
+	 * interface.
 	 */
-	public async downloadReadable(fileName: string): Promise<ReadableStream> {
+	public async downloadReadable(fileName: string): Promise<ReadableStream<Uint8Array> & AsyncDisposable> {
 		await this.lock.lock();
 		if (this.conn === undefined) {
 			this.lock.unlock();
@@ -257,7 +267,12 @@ export class FTPClient implements Deno.Closer {
 		}
 
 		const conn = await this.finalizeDataConnection();
-		return conn.readable;
+
+		return Object.assign(conn.readable, {
+			[Symbol.asyncDispose]: async () => {
+				await this.finalizeStream();
+			}
+		});
 	}
 
 	/**
@@ -293,11 +308,12 @@ export class FTPClient implements Deno.Closer {
 	/**
 	 * Upload a file using a WritableStream interface.
 	 * **Please call FTPClient.finalizeStream()** to release the lock after
-	 * the file is uploaded.
+	 * the file is uploaded. Or, you can use the AsyncDispoable
+	 * interface.
 	 * @param fileName
 	 * @param allocate Number of bytes to allocate to the file. Some servers require this parameter.
 	 */
-	public async uploadWritable(fileName: string, allocate?: number): Promise<WritableStream> {
+	public async uploadWritable(fileName: string, allocate?: number): Promise<WritableStream<Uint8Array> & AsyncDisposable> {
 		await this.lock.lock();
 		if (this.conn === undefined) {
 			this.lock.unlock();
@@ -334,7 +350,11 @@ export class FTPClient implements Deno.Closer {
 
 		const conn = await this.finalizeDataConnection();
 
-		return conn.writable;
+		return Object.assign(conn.writable, {
+			[Symbol.asyncDispose]: async () => {
+				await this.finalizeStream();
+			}
+		});
 	}
 
 	/**
@@ -891,7 +911,7 @@ export class FTPClient implements Deno.Closer {
 	private assertStatus(
 		expected: StatusCodes,
 		result: FTPReply,
-		...resources: (Deno.Closer | undefined)[]
+		...resources: (Disposable | undefined)[]
 	) {
 		if (result.code !== expected) {
 			const errors: Error[] = [];

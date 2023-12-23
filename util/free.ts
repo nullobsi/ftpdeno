@@ -1,7 +1,7 @@
-export default function free(resource: Deno.Closer | undefined) {
+export default function free(resource: Disposable | undefined) {
 	if (resource) {
 		try {
-			resource.close();
+			resource[Symbol.dispose]();
 		} catch (e) {
 			if (e instanceof Deno.errors.BadResource) {
 				return;
