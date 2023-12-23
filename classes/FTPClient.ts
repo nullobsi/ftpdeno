@@ -694,7 +694,7 @@ export class FTPClient implements Deno.Closer {
 	}
 
 	//parse response from FTP control channel
-	private async getStatus(): FTPReply {
+	private async getStatus(): Promise<FTPReply> {
 		if (!this.conn) throw FTPClient.notInit();
 
 		let s = "";
@@ -768,7 +768,7 @@ export class FTPClient implements Deno.Closer {
 				}
 			}
 		} else {
-			const listener = await Deno.listen(
+			const listener = Deno.listen(
 				{
 					transport: "tcp",
 					hostname: this.opts.activeIp,
