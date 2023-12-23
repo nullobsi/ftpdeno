@@ -1,0 +1,7 @@
+{
+	"fmt": {
+		"useTabs": true,
+		"indentWidth": 4,
+		"include": ["classes/", "examples/", "mod.ts", "types/", "util/"]
+	}
+}
